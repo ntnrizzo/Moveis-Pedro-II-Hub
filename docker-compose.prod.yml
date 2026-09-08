@@ -21,7 +21,7 @@ services:
 
       # Retorna 503 se offline há mais de 10 min → Docker reinicia o container
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:3001/whatsapp/health" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:3001/" ]
       interval: 2m
       timeout: 15s
       retries: 3
