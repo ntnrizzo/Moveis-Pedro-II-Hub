@@ -77,31 +77,6 @@ export default function ConfiguracaoNfe() {
     const [formEmpresa, setFormEmpresa] = useState({});
     const [highlightEmitente, setHighlightEmitente] = useState(false);
     const [savingDb, setSavingDb] = useState(false);
-    const [acbrCredentials, setAcbrCredentials] = useState({ client_id: '', client_secret: '' });
-    const [savingCredentials, setSavingCredentials] = useState(false);
-    const [certDialogOpen, setCertDialogOpen] = useState(false);
-    const [savingCert, setSavingCert] = useState(false);
-    const [certFile, setCertFile] = useState(null);
-    const [certPassword, setCertPassword] = useState('');
-    const [certStatus, setCertStatus] = useState({
-        empresaRegistrada: false,
-        validade: null,
-        thumbprint: null,
-    });
-    const [certForm, setCertForm] = useState({
-        cnpj: '',
-        nome_razao_social: '',
-        email: '',
-        logradouro: '',
-        numero: '',
-        complemento: '',
-        bairro: '',
-        cidade: '',
-        uf: 'ES',
-        cep: '',
-        codigo_municipio: '',
-    });
-
     // ─── Padrões Fiscais (org-level defaults) ────────────────────────────────
     const [fiscalDefaults, setFiscalDefaults] = useState({
         csosn_padrao: '102',
@@ -132,25 +107,11 @@ export default function ConfiguracaoNfe() {
         async function carregarDoDb() {
             const { data, error } = await supabase
                 .from('organization_nfe_configs')
-                .select('emitente_cnpj, emitente_nome, emitente_ie, emitente_uf, emitente_crt, emitente_logradouro, emitente_numero, emitente_complemento, emitente_bairro, emitente_municipio, emitente_cep, emitente_codigo_municipio, emitente_email, acbr_client_id, acbr_client_secret, acbr_empresa_registrada, acbr_certificado_validade, acbr_certificado_thumbprint, csosn_padrao, cst_icms_padrao, cst_pis_padrao, cst_cofins_padrao, aliquota_icms_padrao, aliquota_icms_interestadual_padrao, aliquota_pis_padrao, aliquota_cofins_padrao, percentual_tributos_padrao, mod_frete_padrao')
+                .select('emitente_cnpj, emitente_nome, emitente_ie, emitente_uf, emitente_crt, emitente_logradouro, emitente_numero, emitente_complemento, emitente_bairro, emitente_municipio, emitente_cep, emitente_codigo_municipio, emitente_email, csosn_padrao, cst_icms_padrao, cst_pis_padrao, cst_cofins_padrao, aliquota_icms_padrao, aliquota_icms_interestadual_padrao, aliquota_pis_padrao, aliquota_cofins_padrao, percentual_tributos_padrao, mod_frete_padrao')
                 .eq('organization_id', orgId)
                 .maybeSingle();
 
             if (error || !data) return;
-
-            // Credenciais ACBR
-            if (data.acbr_client_id || data.acbr_client_secret) {
-                setAcbrCredentials({
-                    client_id: data.acbr_client_id || '',
-                    client_secret: data.acbr_client_secret || '',
-                });
-            }
-
-            setCertStatus({
-                empresaRegistrada: !!data.acbr_empresa_registrada,
-                validade: data.acbr_certificado_validade || null,
-                thumbprint: data.acbr_certificado_thumbprint || null,
-            });
 
             // Padrões Fiscais
             setFiscalDefaults(prev => ({
@@ -371,168 +332,6 @@ export default function ConfiguracaoNfe() {
         }
     };
 
-    const handleSalvarCredentials = async () => {
-        if (!acbrCredentials.client_id.trim() || !acbrCredentials.client_secret.trim()) {
-            toast.error('Preencha Client ID e Client Secret.');
-            return;
-        }
-        setSavingCredentials(true);
-        try {
-            const { error } = await supabase
-                .from('organization_nfe_configs')
-                .update({
-                    acbr_client_id: acbrCredentials.client_id.trim(),
-                    acbr_client_secret: acbrCredentials.client_secret.trim(),
-                    acbr_access_token: null,
-                    acbr_token_expires_at: null,
-                })
-                .eq('organization_id', orgId);
-
-            if (error) throw error;
-            toast.success('Credenciais da ACBR API salvas com sucesso!');
-        } catch (err) {
-            toast.error('Erro ao salvar credenciais: ' + err.message);
-        } finally {
-            setSavingCredentials(false);
-        }
-    };
-
-    const validarCnpj = (cnpj) => {
-        const cleaned = (cnpj || '').replace(/\D/g, '');
-        if (cleaned.length !== 14) return false;
-        if (/^(\d)\1{13}$/.test(cleaned)) return false;
-
-        let length = cleaned.length - 2;
-        let numbers = cleaned.substring(0, length);
-        const digits = cleaned.substring(length);
-        let sum = 0;
-        let pos = length - 7;
-
-        for (let i = length; i >= 1; i--) {
-            sum += parseInt(numbers.charAt(length - i), 10) * pos--;
-            if (pos < 2) pos = 9;
-        }
-
-        let result = sum % 11 < 2 ? 0 : 11 - (sum % 11);
-        if (result !== parseInt(digits.charAt(0), 10)) return false;
-
-        length += 1;
-        numbers = cleaned.substring(0, length);
-        sum = 0;
-        pos = length - 7;
-
-        for (let i = length; i >= 1; i--) {
-            sum += parseInt(numbers.charAt(length - i), 10) * pos--;
-            if (pos < 2) pos = 9;
-        }
-
-        result = sum % 11 < 2 ? 0 : 11 - (sum % 11);
-        return result === parseInt(digits.charAt(1), 10);
-    };
-
-    const fileToBase64 = async (file) => {
-        const buffer = await file.arrayBuffer();
-        const bytes = new Uint8Array(buffer);
-        let binary = '';
-        const chunkSize = 0x8000;
-        for (let i = 0; i < bytes.length; i += chunkSize) {
-            const chunk = bytes.subarray(i, i + chunkSize);
-            binary += String.fromCharCode(...chunk);
-        }
-        return btoa(binary);
-    };
-
-    const abrirDialogCertificado = () => {
-        const dados = dadosFiscais[empresaPadrao] || {};
-
-        setCertForm({
-            cnpj: (empresaPadrao || '').replace(/\D/g, ''),
-            nome_razao_social: empresaEmissora?.nome || organization?.name || '',
-            email: empresaEmissora?.email || '',
-            logradouro: dados.logradouro || '',
-            numero: dados.numero || '',
-            complemento: dados.complemento || '',
-            bairro: dados.bairro || '',
-            cidade: dados.municipio || '',
-            uf: dados.uf || 'ES',
-            cep: (dados.cep || '').replace(/\D/g, ''),
-            codigo_municipio: dados.codigoMunicipio || '',
-        });
-
-        setCertFile(null);
-        setCertPassword('');
-        setCertDialogOpen(true);
-    };
-
-    const handleRegistrarCertificado = async () => {
-        if (!validarCnpj(certForm.cnpj)) {
-            toast.error('CNPJ inválido.');
-            return;
-        }
-        if (!certForm.nome_razao_social?.trim()) {
-            toast.error('Razão social é obrigatória.');
-            return;
-        }
-        if (!certForm.email?.trim()) {
-            toast.error('Email é obrigatório.');
-            return;
-        }
-        if (!certFile) {
-            toast.error('Selecione o certificado A1 (.pfx ou .p12).');
-            return;
-        }
-        if (!certPassword.trim()) {
-            toast.error('Senha do certificado é obrigatória.');
-            return;
-        }
-
-        setSavingCert(true);
-        try {
-            const certificado_base64 = await fileToBase64(certFile);
-
-            const { data, error } = await supabase.functions.invoke('registrar-empresa-acbr', {
-                body: {
-                    organization_id: orgId,
-                    cnpj: certForm.cnpj,
-                    nome_razao_social: certForm.nome_razao_social,
-                    email: certForm.email,
-                    endereco: {
-                        logradouro: certForm.logradouro,
-                        numero: certForm.numero,
-                        complemento: certForm.complemento,
-                        bairro: certForm.bairro,
-                        cidade: certForm.cidade,
-                        uf: certForm.uf,
-                        cep: certForm.cep,
-                        codigo_municipio: certForm.codigo_municipio,
-                    },
-                    certificado_base64,
-                    certificado_senha: certPassword,
-                },
-            });
-
-            if (error) {
-                throw new Error(error.message || 'Erro ao registrar certificado');
-            }
-            if (!data?.success) {
-                throw new Error(data?.error || 'Falha ao registrar certificado');
-            }
-
-            setCertStatus({
-                empresaRegistrada: true,
-                validade: data.data?.certificado_validade || null,
-                thumbprint: data.data?.thumbprint || null,
-            });
-
-            toast.success('Certificado registrado com sucesso na ACBR API.');
-            setCertDialogOpen(false);
-        } catch (err) {
-            toast.error('Erro ao registrar certificado: ' + err.message);
-        } finally {
-            setSavingCert(false);
-        }
-    };
-
     return (
         <div className="max-w-4xl mx-auto space-y-6">
             <div>
@@ -543,99 +342,12 @@ export default function ConfiguracaoNfe() {
                 <p className="text-gray-500 mt-1">Gerencie os dados fiscais obrigatórios para cada CNPJ emissor.</p>
             </div>
 
-            {/* ─── Credenciais ACBR API ─────────────────────────────────── */}
-            <Card className="border-t-4 border-t-blue-600 shadow-sm">
-                <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                        <AlertCircle className="w-5 h-5 text-blue-600" />
-                        Credenciais da ACBR API
-                    </CardTitle>
-                    <CardDescription>
-                        Client ID e Client Secret do painel da ACBR API. Obrigatório para emissão via API.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="grid md:grid-cols-2 gap-4">
-                        <div>
-                            <Label>Client ID</Label>
-                            <Input
-                                value={acbrCredentials.client_id}
-                                onChange={(e) => setAcbrCredentials(prev => ({ ...prev, client_id: e.target.value }))}
-                                placeholder="Obtido em acbr.api.br"
-                                className="font-mono text-sm"
-                            />
-                        </div>
-                        <div>
-                            <Label>Client Secret</Label>
-                            <Input
-                                type="password"
-                                value={acbrCredentials.client_secret}
-                                onChange={(e) => setAcbrCredentials(prev => ({ ...prev, client_secret: e.target.value }))}
-                                placeholder="Obtido em acbr.api.br"
-                                className="font-mono text-sm"
-                            />
-                        </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                        <Button onClick={handleSalvarCredentials} disabled={savingCredentials} className="bg-blue-700 hover:bg-blue-800">
-                            {savingCredentials ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                            Salvar Credenciais
-                        </Button>
-                        {acbrCredentials.client_id && acbrCredentials.client_secret && (
-                            <Badge className="bg-green-100 text-green-800 border-green-200">Configurado</Badge>
-                        )}
-                        {(!acbrCredentials.client_id || !acbrCredentials.client_secret) && (
-                            <Badge variant="outline" className="text-red-600 bg-red-50 border-red-100">Pendente</Badge>
-                        )}
-                    </div>
-                </CardContent>
-            </Card>
-
-            <Card className="border-t-4 border-t-indigo-600 shadow-sm">
-                <CardHeader>
-                    <CardTitle className="text-lg flex items-center gap-2">
-                        <AlertCircle className="w-5 h-5 text-indigo-600" />
-                        Certificado Digital (A1)
-                    </CardTitle>
-                    <CardDescription>
-                        Cadastre ou renove o certificado A1 (.pfx/.p12) da empresa emissora para habilitar emissão na ACBR API.
-                    </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-3">
-                        {certStatus.empresaRegistrada ? (
-                            <Badge className="bg-green-100 text-green-800 border-green-200">Empresa registrada na ACBR</Badge>
-                        ) : (
-                            <Badge variant="outline" className="text-red-600 bg-red-50 border-red-100">Empresa não registrada</Badge>
-                        )}
-
-                        {certStatus.validade ? (
-                            <Badge variant="outline" className="text-blue-700 bg-blue-50 border-blue-200">
-                                Validade: {new Date(certStatus.validade).toLocaleDateString('pt-BR')}
-                            </Badge>
-                        ) : (
-                            <Badge variant="outline" className="text-amber-700 bg-amber-50 border-amber-200">Sem validade registrada</Badge>
-                        )}
-                    </div>
-
-                    {certStatus.thumbprint && (
-                        <p className="text-xs text-gray-600 font-mono break-all">
-                            Thumbprint: {certStatus.thumbprint}
-                        </p>
-                    )}
-
-                    <Button onClick={abrirDialogCertificado} className="bg-indigo-700 hover:bg-indigo-800">
-                        Cadastrar / Renovar Certificado
-                    </Button>
-                </CardContent>
-            </Card>
-
-            {/* ─── Padrões Fiscais para Emissão de NF-e ───────────────── */}
+            {/* ─── Padrões fiscais da empresa ───────────────── */}
             <Card className="border-t-4 border-t-amber-500 shadow-sm">
                 <CardHeader>
                     <CardTitle className="text-lg flex items-center gap-2">
                         <AlertCircle className="w-5 h-5 text-amber-600" />
-                        Padrões Fiscais para Emissão de NF-e
+                        Padrões fiscais da empresa
                     </CardTitle>
                     <CardDescription>
                         Valores padrão de CSOSN/CST, alíquotas e tributação usados na emissão. Produtos com valores próprios terão prioridade.
@@ -884,7 +596,7 @@ export default function ConfiguracaoNfe() {
                                 <div className="text-center py-8">
                                     <Building2 className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                                     <p className="text-gray-500 mb-4">Nenhuma empresa emissora configurada para esta organização.</p>
-                                    <p className="text-sm text-gray-400 mb-4">Configure as credenciais ACBR acima e cadastre o certificado digital para começar.</p>
+                                    <p className="text-sm text-gray-400 mb-4">Preencha os dados cadastrais da organização para continuar.</p>
                                 </div>
                             );
                         }
@@ -1036,86 +748,7 @@ export default function ConfiguracaoNfe() {
                 </DialogContent>
             </Dialog>
 
-            <Dialog open={certDialogOpen} onOpenChange={setCertDialogOpen}>
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                    <DialogHeader>
-                        <DialogTitle>Cadastro de Certificado A1 (ACBR API)</DialogTitle>
-                        <DialogDescription>
-                            Revise os dados da empresa, anexe o arquivo .pfx/.p12 e informe a senha do certificado.
-                        </DialogDescription>
-                    </DialogHeader>
-
-                    <div className="space-y-4 py-2">
-                        <Alert className="bg-amber-50 border-amber-200">
-                            <AlertCircle className="h-4 w-4 text-amber-600" />
-                            <AlertDescription className="text-amber-800">
-                                Apenas certificados A1 (.pfx ou .p12) são suportados.
-                            </AlertDescription>
-                        </Alert>
-
-                        <div className="grid md:grid-cols-2 gap-4">
-                            <div>
-                                <Label>CNPJ *</Label>
-                                <Input value={certForm.cnpj} onChange={(e) => setCertForm(prev => ({ ...prev, cnpj: e.target.value }))} placeholder="Somente números" />
-                            </div>
-                            <div>
-                                <Label>Razão Social *</Label>
-                                <Input value={certForm.nome_razao_social} onChange={(e) => setCertForm(prev => ({ ...prev, nome_razao_social: e.target.value }))} />
-                            </div>
-                        </div>
-
-                        <div>
-                            <Label>Email *</Label>
-                            <Input type="email" value={certForm.email} onChange={(e) => setCertForm(prev => ({ ...prev, email: e.target.value }))} />
-                        </div>
-
-                        <div className="grid md:grid-cols-3 gap-4">
-                            <div><Label>CEP *</Label><Input value={certForm.cep} onChange={(e) => setCertForm(prev => ({ ...prev, cep: e.target.value }))} /></div>
-                            <div className="md:col-span-2"><Label>Logradouro *</Label><Input value={certForm.logradouro} onChange={(e) => setCertForm(prev => ({ ...prev, logradouro: e.target.value }))} /></div>
-                        </div>
-
-                        <div className="grid md:grid-cols-3 gap-4">
-                            <div><Label>Número *</Label><Input value={certForm.numero} onChange={(e) => setCertForm(prev => ({ ...prev, numero: e.target.value }))} /></div>
-                            <div><Label>Complemento</Label><Input value={certForm.complemento} onChange={(e) => setCertForm(prev => ({ ...prev, complemento: e.target.value }))} /></div>
-                            <div><Label>Bairro *</Label><Input value={certForm.bairro} onChange={(e) => setCertForm(prev => ({ ...prev, bairro: e.target.value }))} /></div>
-                        </div>
-
-                        <div className="grid md:grid-cols-3 gap-4">
-                            <div><Label>Cidade *</Label><Input value={certForm.cidade} onChange={(e) => setCertForm(prev => ({ ...prev, cidade: e.target.value }))} /></div>
-                            <div>
-                                <Label>UF *</Label>
-                                <Select value={certForm.uf} onValueChange={(v) => setCertForm(prev => ({ ...prev, uf: v }))}>
-                                    <SelectTrigger><SelectValue /></SelectTrigger>
-                                    <SelectContent>
-                                        {["AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA", "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO"].map(uf => (
-                                            <SelectItem key={uf} value={uf}>{uf}</SelectItem>
-                                        ))}
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div><Label>Código Município IBGE *</Label><Input value={certForm.codigo_municipio} onChange={(e) => setCertForm(prev => ({ ...prev, codigo_municipio: e.target.value }))} /></div>
-                        </div>
-
-                        <div>
-                            <Label>Certificado A1 (.pfx/.p12) *</Label>
-                            <Input type="file" accept=".pfx,.p12" onChange={(e) => setCertFile(e.target.files?.[0] || null)} />
-                        </div>
-
-                        <div>
-                            <Label>Senha do Certificado *</Label>
-                            <Input type="password" value={certPassword} onChange={(e) => setCertPassword(e.target.value)} />
-                        </div>
-                    </div>
-
-                    <DialogFooter>
-                        <Button variant="ghost" onClick={() => setCertDialogOpen(false)}>Cancelar</Button>
-                        <Button onClick={handleRegistrarCertificado} disabled={savingCert} className="bg-indigo-700 hover:bg-indigo-800">
-                            {savingCert ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                            Registrar Certificado
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
+            
         </div>
     );
 }

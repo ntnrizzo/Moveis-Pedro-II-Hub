@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -38,6 +38,8 @@ export default function RecebimentoModal({
   onSuccess,
 }) {
   const queryClient = useQueryClient();
+  const requestId = useRef(crypto.randomUUID());
+  useEffect(() => { requestId.current = crypto.randomUUID(); }, [isOpen, oc?.id]);
   const [dados, setDados] = useState({
     chave_nfe: '',
     observacoes: '',
@@ -166,6 +168,7 @@ export default function RecebimentoModal({
       setIsLoading(true);
       try {
         await comprasService.receberOc(oc.id, {
+          request_id: requestId.current,
           itens_recebidos: itensRecebidosSelecionados,
           chave_nfe: dados.chave_nfe || '',
           observacoes: dados.observacoes || '',

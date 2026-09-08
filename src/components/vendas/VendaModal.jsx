@@ -79,7 +79,7 @@ const detalhesItemPDF = (item = {}) => ({
 });
 
 export default function VendaModal({ isOpen, onClose, onSave, venda, clientes, produtos, isLoading, userLoja, proximoNumero }) {
-  const { organization, settings } = useTenant();
+  const { organization, settings, brandName, brandLogo } = useTenant();
   const [formData, setFormData] = useState({
     numero_pedido: proximoNumero || "",
     data_venda: obterDataLocalString(),
@@ -506,8 +506,8 @@ export default function VendaModal({ isOpen, onClose, onSave, venda, clientes, p
       </head>
       <body>
         <div class="header">
-          <img src="${organization?.logo_url || EMPRESA.logo_url}" alt="Logo" />
-          <h1>${organization?.name || EMPRESA.nome}</h1>
+          <img src="${organization?.logo_url || brandLogo || '/favicon.svg'}" alt="Logo" />
+          <h1>${organization?.name || brandName}</h1>
           <p>Loja ${vendaData.loja}</p>
         </div>
 
@@ -604,7 +604,7 @@ export default function VendaModal({ isOpen, onClose, onSave, venda, clientes, p
 
         <div class="footer">
           <p>Obrigado pela preferência!</p>
-          <p>${organization?.name || EMPRESA.nome} - Loja ${vendaData.loja}</p>
+          <p>${organization?.name || brandName} - Loja ${vendaData.loja}</p>
         </div>
       </body>
       </html>
@@ -666,7 +666,7 @@ ${vendaData.prazo_entrega === 'Retirado na loja'
       }
 
 Obrigado pela preferência! 🧡💚
-_${organization?.name || EMPRESA.nome} - ${vendaData.loja}_`;
+_${organization?.name || brandName} - ${vendaData.loja}_`;
 
     const url = `https://wa.me/55${telefone}?text=${encodeURIComponent(mensagem)}`;
     window.open(url, '_blank');

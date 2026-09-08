@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Search, Upload, X, GripVertical, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { isValidGTIN, normalizeGTIN, normalizeSKU, generateSafeSKU } from "@/utils/gtinValidator";
 
 const categorias = ["Sofá", "Cama", "Mesa", "Cadeira", "Armário", "Estante", "Rack", "Poltrona", "Escrivaninha", "Criado-mudo", "Buffet", "Aparador", "Banco", "Travesseiro", "Almofada", "Decorações", "Utensílios", "Outros"];
 const ambientes = ["Quarto", "Sala", "Cozinha", "Escritório", "Banheiro", "Área Externa", "Hall", "Varanda"];
@@ -18,6 +19,7 @@ export default function ProdutoForm({ produto = null, onSave, isLoading }) {
   const { user } = useAuth();
   const showFinancials = user?.cargo === 'Administrador';
   const [formData, setFormData] = useState({
+    sku: "",
     codigo_barras: "",
     nome: "",
     modelo_referencia: "",
@@ -163,16 +165,27 @@ export default function ProdutoForm({ produto = null, onSave, isLoading }) {
       return;
     }
 
-    // --- CORREÇÃO AQUI ---
-    // Limpa os dados antes de enviar: Transforma "" em null
+    if (formData.codigo_barras && formData.codigo_barras.trim()) {
+      if (!isValidGTIN(formData.codigo_barras)) {
+        toast.error("Código de barras inválido. Deve ser um GTIN oficial (8, 12, 13 ou 14 dígitos com checksum).");
+        return;
+      }
+    }
+
+    const skuFinal = (formData.sku && formData.sku.trim())
+      ? normalizeSKU(formData.sku)
+      : (produto?.sku || generateSafeSKU('PRD'));
+    const gtinFinal = (formData.codigo_barras && formData.codigo_barras.trim())
+      ? normalizeGTIN(formData.codigo_barras, true)
+      : null;
+
+    // Limpa os dados antes de enviar
     const dadosParaSalvar = {
       ...formData,
+      sku: skuFinal,
+      codigo_barras: gtinFinal,
       modelo_referencia: formData.modelo_referencia || null,
-      // Se fornecedor_id for vazio, manda null (para não quebrar o banco)
       fornecedor_id: formData.fornecedor_id === "" ? null : formData.fornecedor_id,
-      // Mesma coisa para código de barras
-      codigo_barras: formData.codigo_barras === "" ? null : formData.codigo_barras,
-      // Garante que números são números
       preco_venda: Number(formData.preco_venda),
       preco_custo: Number(formData.preco_custo),
       largura: Number(formData.largura),
@@ -189,13 +202,13 @@ export default function ProdutoForm({ produto = null, onSave, isLoading }) {
     <form onSubmit={handleSubmit} className="space-y-6">
       {/* Código de Barras */}
       <div className="p-4 rounded-lg border-2" style={{ borderColor: '#3b82f6', backgroundColor: '#eff6ff' }}>
-        <Label htmlFor="codigo_barras">Código de Barras</Label>
+        <Label htmlFor="codigo_barras">Código de Barras (EAN / GTIN)</Label>
         <div className="flex gap-2 mt-2">
           <Input
             id="codigo_barras"
             value={formData.codigo_barras}
             onChange={(e) => setFormData({ ...formData, codigo_barras: e.target.value })}
-            placeholder="Digite ou escaneie o código"
+            placeholder="Digite ou escaneie o código (GTIN oficial)"
           />
           <Button
             type="button"
@@ -219,7 +232,18 @@ export default function ProdutoForm({ produto = null, onSave, isLoading }) {
             id="nome"
             value={formData.nome}
             onChange={(e) => setFormData({ ...formData, nome: e.target.value })}
-            required
+            placeholder="Nome do produto"
+          />
+        </div>
+
+        <div>
+          <Label htmlFor="sku">SKU / Código Interno *</Label>
+          <Input
+            id="sku"
+            value={formData.sku}
+            onChange={(e) => setFormData({ ...formData, sku: e.target.value })}
+            placeholder={produto ? "Ex: SOF-RET-3L" : "Gerado automaticamente se vazio"}
+            className="font-mono"
           />
         </div>
         <div>

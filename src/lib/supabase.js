@@ -1,3 +1,4 @@
+import { auditSnapshot } from '@/utils/auditSnapshot';
 import { createClient } from '@supabase/supabase-js';
 
 // Configuração do Supabase
@@ -241,7 +242,7 @@ const createHandler = (tableName) => ({
                         table_name: tableName,
                         action: 'INSERT',
                         record_id: created.id,
-                        new_data: created,
+                        new_data: auditSnapshot(created),
                         user_id: user.id
                     }).then(({ error: auditError }) => {
                         if (auditError) console.error("Erro Audit Log (Insert):", auditError);
@@ -264,10 +265,14 @@ const createHandler = (tableName) => ({
             } catch (e) { /* ignore */ }
         }
 
-        const { data: updated, error } = await supabase.from(tableName).update(data).eq('id', id).select().single();
+        const { data: updated, error } = await supabase.from(tableName).update(data).eq('id', id).select().maybeSingle();
         if (error) {
-            console.error(`Erro Supabase (Atualizar ${id} em ${tableName}):`, error, 'Dados enviados:', data);
+            console.error(`Erro Supabase (Atualizar ${id} em ${tableName}):`, { code: error.code });
             throw error;
+        }
+
+        if (!updated) {
+            throw new Error('Não foi possível salvar: o registro não existe mais ou seu usuário não tem permissão para alterá-lo nesta empresa.');
         }
 
         // Audit Log
@@ -280,8 +285,8 @@ const createHandler = (tableName) => ({
                         table_name: tableName,
                         action: 'UPDATE',
                         record_id: id,
-                        old_data: oldData,
-                        new_data: updated,
+                        old_data: auditSnapshot(oldData),
+                        new_data: auditSnapshot(updated),
                         user_id: user.id
                     }).then(({ error: auditError }) => {
                         if (auditError) console.error("Erro Audit Log (Update):", auditError);
@@ -327,7 +332,7 @@ const createHandler = (tableName) => ({
                         table_name: tableName,
                         action: 'UPSERT',
                         record_id: upserted.id,
-                        new_data: upserted,
+                        new_data: auditSnapshot(upserted),
                         user_id: user.id
                     }).then(({ error: auditError }) => {
                         if (auditError) console.error("Erro Audit Log (Upsert):", auditError);
@@ -366,7 +371,7 @@ const createHandler = (tableName) => ({
                         table_name: tableName,
                         action: 'DELETE',
                         record_id: id,
-                        old_data: oldData,
+                        old_data: auditSnapshot(oldData),
                         user_id: user.id
                     }).then(({ error: auditError }) => {
                         if (auditError) console.error("Erro Audit Log (Delete):", auditError);
@@ -566,10 +571,7 @@ export const base44 = {
 
                 // Fire and forget, sem await para não travar
                 Promise.resolve(
-                    supabase.rpc('track_user_footstep', {
-                        p_user_id: userId,
-                        p_step: step
-                    })
+                    supabase.rpc('track_user_footstep')
                 ).catch(e => console.warn('[Telemetry] DB error:', e));
             } catch (e) {
                 console.warn('[Telemetry] Erro ao gravar footstep:', e);

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 
 // Contexto para dados do tenant (organização)
@@ -56,126 +56,73 @@ export function TenantProvider({ children, organizationId, slug: slugProp }) {
     const [lojas, setLojas] = useState([]);
     const [loading, setLoading] = useState(true);
 
+    const dataVersion = useRef(0);
     const [error, setError] = useState(null);
     const [resolvedOrgId, setResolvedOrgId] = useState(organizationId || null);
     const [isDomainResolved, setIsDomainResolved] = useState(false);
 
-    // Detectar o organization_id: prioridade hostname/domain > slug > organizationId > sessão do usuário > fallback
     useEffect(() => {
-        const detectOrganization = async () => {
-            // A. Detectar por hostname (domínio customizado ou subdomínio)
-            const hostname = window.location.hostname;
-            const mainDomains = ['localhost', 'moveis-pedro-ii-hub.vercel.app', 'gesthub.com', 'GestApp.com.br']; // domínios principais do SaaS
-
-            const isMainDomain = mainDomains.includes(hostname) || hostname.endsWith('.vercel.app');
-
-            if (!isMainDomain) {
-                try {
-                    // 1. Verificar se é um subdomínio (ex: moveis-pedro-ii.gesthub.com)
-                    const parts = hostname.split('.');
-                    if (parts.length > 2) {
-                        const subdomain = parts[0];
-                        const { data: orgBySlug } = await supabase
-                            .from('organizations')
-                            .select('id')
-                            .eq('slug', subdomain)
-                            .maybeSingle();
-
-                        if (orgBySlug?.id) {
-                            setResolvedOrgId(orgBySlug.id);
-                            setIsDomainResolved(true);
-                            return;
-                        }
-                    }
-
-                    // 2. Verificar se é um domínio customizado completo (ex: portal.moveispedroii.com.br)
-                    const { data: orgByDomain } = await supabase
-                        .from('organizations')
-                        .select('id')
-                        .eq('custom_domain', hostname)
-                        .maybeSingle();
-
-                    if (orgByDomain?.id) {
-                        setResolvedOrgId(orgByDomain.id);
-                        setIsDomainResolved(true);
-                        return;
-                    }
-                } catch (err) {
-                    console.warn('[Tenant] Erro ao resolver tenant por hostname:', hostname, err);
-                }
-            }
-
-            // B. Se um slug foi passado (rota pública/path-based), resolver por slug
-            if (slugProp) {
-                try {
-                    const { data: orgBySlug } = await supabase
-                        .from('organizations')
-                        .select('id')
-                        .eq('slug', slugProp)
-                        .maybeSingle();
-
-                    if (orgBySlug?.id) {
-                        setResolvedOrgId(orgBySlug.id);
-                        setIsDomainResolved(false);
-                        return;
-                    }
-                } catch (err) {
-                    console.warn('[Tenant] Erro ao resolver slug:', slugProp, err);
-                }
-                // Slug inválido — cai no fallback abaixo
-            }
-
-            // C. Se um organizationId foi passado explicitamente, usar ele
-            if (organizationId) {
-                setResolvedOrgId(organizationId);
-                return;
-            }
-
-            // D. Tentar detectar via sessão do usuário logado
+        let version = 0;
+        let disposed = false;
+        const detect = async () => {
+            if (disposed) return;
+            const request = ++version;
+            const current = () => !disposed && request === version;
+            dataVersion.current++;
+            setResolvedOrgId(null);
+            setOrganization(null);
+            setSettings(null);
+            setPlano(null);
+            setLojas([]);
+            setLoading(true);
+            setError(null);
+            localStorage.removeItem('current_organization_id');
             try {
-                const { data: { session } } = await supabase.auth.getSession();
-                if (session?.user) {
-                    const { data: profile } = await supabase
-                        .from('public_users')
-                        .select('organization_id')
-                        .eq('id', session.user.id)
-                        .maybeSingle();
-
-                    if (profile?.organization_id) {
-                        setResolvedOrgId(profile.organization_id);
-                        return;
+                let id = organizationId || null;
+                let byDomain = false;
+                const hostname = window.location.hostname.toLowerCase();
+                const mainDomains = ['localhost', 'gesthub.com', 'gestapp.com.br'];
+                if (slugProp) {
+                    const { data, error } = await supabase.from('organizations').select('id').eq('slug', slugProp).single();
+                    if (error || !data) throw new Error('Organização não encontrada');
+                    id = data.id;
+                } else if (!mainDomains.includes(hostname) && !hostname.endsWith('.vercel.app')) {
+                    const { data, error } = await supabase.from('organizations').select('id').eq('custom_domain', hostname).maybeSingle();
+                    if (error) throw error;
+                    if (data) { id = data.id; byDomain = true; }
+                    else if (hostname.endsWith('.gesthub.com')) {
+                        const { data: sub, error: subError } = await supabase.from('organizations').select('id').eq('slug', hostname.split('.')[0]).single();
+                        if (subError || !sub) throw new Error('Organização não encontrada');
+                        id = sub.id; byDomain = true;
                     }
                 }
-            } catch (err) {
-                console.warn('[Tenant] Erro ao detectar organização do usuário:', err);
-            }
-
-            // E. Fallback: ID padrão (retrocompatibilidade)
-            setResolvedOrgId('00000000-0000-0000-0000-000000000001');
-        };
-
-        detectOrganization();
-
-        // Reagir a mudanças de autenticação (login/logout) — apenas se não tem slug fixo ou domínio resolvido
-        if (!slugProp && !isDomainResolved) {
-            const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-                if (!session) {
-                    // Logout — voltar ao padrão
-                    setResolvedOrgId('00000000-0000-0000-0000-000000000001');
-                } else {
-                    // Novo login — detectar novamente
-                    detectOrganization();
+                if (!id) {
+                    const { data: { session }, error } = await supabase.auth.getSession();
+                    if (error) throw error;
+                    if (session?.user) {
+                        const { data: profile, error: profileError } = await supabase.from('public_users')
+                            .select('organization_id, ativo').eq('id', session.user.id).single();
+                        if (profileError || !profile?.ativo || !profile.organization_id) throw new Error('Perfil sem organização ativa');
+                        id = profile.organization_id;
+                    }
                 }
-            });
-
-            return () => subscription?.unsubscribe();
-        }
-    }, [organizationId, slugProp, isDomainResolved]);
+                if (!current()) return;
+                setResolvedOrgId(id);
+                setIsDomainResolved(byDomain);
+                if (!id) setLoading(false);
+            } catch (err) {
+                if (current()) { setError(err); setLoading(false); }
+            }
+        };
+        detect();
+        // Defer auth work until Supabase releases its auth callback lock.
+        const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => { if (event !== 'TOKEN_REFRESHED') queueMicrotask(detect); });
+        return () => { disposed = true; version++; dataVersion.current++; subscription.unsubscribe(); };
+    }, [organizationId, slugProp]);
 
     useEffect(() => {
-        if (resolvedOrgId) {
-            loadTenantData();
-        }
+        if (resolvedOrgId) loadTenantData();
+        return () => { dataVersion.current++; };
     }, [resolvedOrgId]);
 
     useEffect(() => {
@@ -215,77 +162,37 @@ export function TenantProvider({ children, organizationId, slug: slugProp }) {
     }, [organization]);
 
     const loadTenantData = async () => {
+        const version = ++dataVersion.current;
+        const current = () => version === dataVersion.current;
+        if (!resolvedOrgId) return;
+        setLoading(true);
+        setError(null);
         try {
-            setLoading(true);
-            setError(null);
-
-            const orgId = resolvedOrgId || '00000000-0000-0000-0000-000000000001';
-
-            // Carregar organização
-            const { data: orgData, error: orgError } = await supabase
-                .from('organizations')
-                .select('*')
-                .eq('id', orgId)
-                .single();
-
-            if (orgError) {
-                console.warn('Erro ao carregar organização, usando padrão:', orgError);
-                setOrganization(DEFAULT_ORGANIZATION);
-                setPlano(null);
-                try { localStorage.setItem('current_organization_id', DEFAULT_ORGANIZATION.id); } catch (_) {}
-            } else {
-                setOrganization(orgData);
-                try { localStorage.setItem('current_organization_id', orgData.id); } catch (_) {}
-                if (orgData?.plano_id) {
-                    const { data: pData } = await supabase
-                        .from('planos')
-                        .select('*')
-                        .eq('id', orgData.plano_id)
-                        .maybeSingle();
-                    setPlano(pData || null);
-                } else {
-                    setPlano(null);
-                }
-            }
-
-
-            // Carregar configurações
-            const { data: settingsData, error: settingsError } = await supabase
-                .from('organization_settings')
-                .select('*')
-                .eq('organization_id', orgId)
-                .single();
-
-            if (settingsError) {
-                console.warn('Erro ao carregar settings, usando padrão:', settingsError);
-                setSettings(DEFAULT_SETTINGS);
-            } else {
-                setSettings(settingsData);
-            }
-
-            // Carregar lojas
-            const { data: lojasData, error: lojasError } = await supabase
-                .from('lojas')
-                .select('*')
-                .eq('organization_id', orgId)
-                .eq('is_active', true)
-                .order('nome');
-
-            if (lojasError) {
-                console.warn('Erro ao carregar lojas:', lojasError);
-                setLojas([]);
-            } else {
-                setLojas(lojasData || []);
-            }
-
+            const results = await Promise.all([
+                supabase.from('organizations').select('*').eq('id', resolvedOrgId).single(),
+                supabase.from('organization_settings').select('*').eq('organization_id', resolvedOrgId).single(),
+                supabase.from('lojas').select('*').eq('organization_id', resolvedOrgId).eq('is_active', true).order('nome'),
+            ]);
+            for (const result of results) if (result.error) throw result.error;
+            const [org, config, stores] = results;
+            const plan = org.data.plano_id ? await supabase.from('planos').select('*').eq('id', org.data.plano_id).single() : { data: null };
+            if (plan.error) throw plan.error;
+            if (!current()) return;
+            setOrganization(org.data);
+            setSettings(config.data);
+            setLojas(stores.data || []);
+            setPlano(plan.data);
+            localStorage.setItem('current_organization_id', org.data.id);
         } catch (err) {
-            console.error('Erro ao carregar dados do tenant:', err);
+            if (!current()) return;
             setError(err);
-            // Usar valores padrão em caso de erro
-            setOrganization(DEFAULT_ORGANIZATION);
-            setSettings(DEFAULT_SETTINGS);
+            setOrganization(null);
+            setSettings(null);
+            setPlano(null);
+            setLojas([]);
+            localStorage.removeItem('current_organization_id');
         } finally {
-            setLoading(false);
+            if (current()) setLoading(false);
         }
     };
 

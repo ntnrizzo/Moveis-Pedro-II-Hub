@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Plus, Search, Filter, FileText, Loader2, Archive, ShoppingCart, Receipt, CheckCircle, XCircle, AlertTriangle, MessageCircle, CreditCard, Link2, Truck, Package, Wrench, Clock, MapPin, UserCheck, ClipboardList, Info, CalendarX, Settings, ArrowRightLeft, Unlock, ArrowUpDown, ArrowUp, ArrowDown, Percent, Edit2, ShieldCheck } from "lucide-react";
+import { Plus, Search, Filter, FileText, Loader2, Archive, ShoppingCart, Receipt, CheckCircle, XCircle, AlertTriangle, MessageCircle, CreditCard, Link2, Truck, Package, Wrench, Clock, MapPin, UserCheck, ClipboardList, Info, CalendarX, Settings, ArrowRightLeft, Unlock, ArrowUpDown, ArrowUp, ArrowDown, Percent, Edit2, ShieldCheck, MoreHorizontal, Download, ChevronLeft, ChevronRight, Phone, CalendarDays } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -24,7 +24,6 @@ import { useLojas } from "@/hooks/useLojas";
 import { useTenant } from "@/contexts/TenantContext";
 import { useConfirm } from "@/hooks/useConfirm";
 import ArquivoTab from "../components/vendas/ArquivoTab";
-import EmitirNFeModal from "../components/vendas/EmitirNFeModal";
 import TransferirMontagemModal from "../components/vendas/TransferirMontagemModal";
 import { VendaDetalhesModal } from "@/components/vendas/VendaDetalhesModal";
 import EdicaoPedidoModal from "@/components/conferencia/EdicaoPedidoModal";
@@ -74,6 +73,48 @@ const SORT_DEFAULT_DIRECTIONS = {
     total: 'desc',
 };
 
+const ORDER_STAGE_META = {
+    andamento: { label: 'Em andamento', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    producao: { label: 'Em produção', className: 'bg-amber-50 text-amber-700 border-amber-100' },
+    saiu_entrega: { label: 'Saiu para entrega', className: 'bg-sky-50 text-sky-700 border-sky-100' },
+    entregue: { label: 'Entregue', className: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    cancelado: { label: 'Cancelado', className: 'bg-rose-50 text-rose-700 border-rose-100' },
+};
+
+const normalizeOrderText = (value) => String(value || '').trim().toLocaleLowerCase('pt-BR');
+
+const getOrderStage = (venda) => {
+    if (isVendaCancelada(venda)) return 'cancelado';
+
+    const deliveryStatus = normalizeOrderText(venda?.resumoLogistico?.entregaPrincipal?.status);
+    const saleStatus = normalizeOrderText(venda?.status);
+    const combinedStatus = `${deliveryStatus} ${saleStatus}`;
+
+    if (['entregue', 'retirado', 'concluida', 'concluída'].some((status) => deliveryStatus === status)) {
+        return 'entregue';
+    }
+
+    if (deliveryStatus === 'em rota') return 'saiu_entrega';
+
+    if (['produção', 'producao', 'separação', 'separacao', 'expedição', 'expedicao'].some((status) => combinedStatus.includes(status))) {
+        return 'producao';
+    }
+
+    if (venda?.triagem_realizada && !venda?.financeiro?.isPending && !deliveryStatus) {
+        return 'producao';
+    }
+
+    return 'andamento';
+};
+
+const isCurrentMonth = (value) => {
+    if (!value) return false;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return false;
+    const today = new Date();
+    return date.getMonth() === today.getMonth() && date.getFullYear() === today.getFullYear();
+};
+
 export default function Vendas() {
     const formatarValorMonetarioInput = (value) => {
         const digitsOnly = String(value ?? "").replace(/\D/g, "");
@@ -88,11 +129,16 @@ export default function Vendas() {
 
     const [search, setSearch] = useState("");
     const [statusFilter, setStatusFilter] = useState("all");
+    const [orderStageFilter, setOrderStageFilter] = useState("all");
+    const [periodFilter, setPeriodFilter] = useState("all");
+    const [sellerFilter, setSellerFilter] = useState("all");
+    const [paymentFilter, setPaymentFilter] = useState("all");
+    const [selectedDashboardVendaId, setSelectedDashboardVendaId] = useState(null);
+    const [isDashboardDetailOpen, setIsDashboardDetailOpen] = useState(true);
+    const [currentPage, setCurrentPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
     const [sortConfig, setSortConfig] = useState({ key: 'data', direction: 'desc' });
     const [activeTab, setActiveTab] = useState("vendas");
-    const [nfeModalOpen, setNfeModalOpen] = useState(false);
-    const [vendaParaNfe, setVendaParaNfe] = useState(null);
-    const [clienteParaNfe, setClienteParaNfe] = useState(null);
     const [selectedVendaDetalhes, setSelectedVendaDetalhes] = useState(null);
     const [isDetalhesModalOpen, setIsDetalhesModalOpen] = useState(false);
     const [modalAcoesVenda, setModalAcoesVenda] = useState(null);
@@ -162,6 +208,7 @@ export default function Vendas() {
     const canManagePayments = can('manage_financeiro') || can('manage_vendas');
     const canManageVendas = can('manage_vendas');
     const canManageDeliveryStatus = can('manage_entregas') || canManageVendas;
+    const canCreateVendas = can('create_vendas');
     const canUseBulkActions = user?.cargo === 'Administrador' || user?.cargo === 'Gerente Geral' || canManageDeliveryStatus;
 
     // Estado para modal de edição de pedido antes da conferência
@@ -183,45 +230,6 @@ export default function Vendas() {
         queryKey: ['categorias-financeiras'],
         queryFn: () => base44.entities.CategoriaFinanceira.list('nome')
     });
-
-    // Smart Return Flow: Reabrir modal de emissão se solicitado via URL
-    React.useEffect(() => {
-        const emitirNfeId = searchParams.get('emitirNfe');
-        if (emitirNfeId) {
-            // Força atualização dos dados da venda e do cliente para garantir que edições sejam refletidas
-            queryClient.invalidateQueries({ queryKey: ['vendas'] });
-            queryClient.invalidateQueries({ queryKey: ['clientes'] });
-        }
-
-        if (emitirNfeId && vendas.length > 0 && clientes.length > 0 && !isLoading) {
-            const venda = vendas.find(v => v.id === emitirNfeId);
-            if (venda) {
-                const cliente = clientes.find(c => c.id === venda.cliente_id);
-                // Mesmo se cliente não for encontrado na lista (ex: muitas páginas), tenta abrir
-                // Idealmente buscaria o cliente individualmente, mas assumindo que está na lista recente
-
-                if (cliente) {
-                    setClienteParaNfe(cliente);
-                } else {
-                    // Fallback se não achar cliente na lista carregada
-                    // Poderia fazer um fetch aqui, mas por simplicidade vamos tentar renderizar sem ou esperar refetch
-                    // O componente EmitirNFeModal pode precisar do cliente. 
-                    // Se user for admin, talvez não precise? Geralmente precisa.
-                }
-
-                setVendaParaNfe(venda);
-                setClienteParaNfe(cliente);
-                setNfeModalOpen(true);
-
-                // Limpar URL para não reabrir ao dar F5
-                setSearchParams(params => {
-                    const newParams = new URLSearchParams(params);
-                    newParams.delete('emitirNfe');
-                    return newParams;
-                }, { replace: true });
-            }
-        }
-    }, [searchParams, vendas, clientes, isLoading, setSearchParams]);
 
     // Query para buscar lançamentos (para poder cancelar os vinculados)
     const { data: lancamentos = [] } = useQuery({
@@ -734,12 +742,6 @@ export default function Vendas() {
         cancelarVendaMutation.mutate(venda);
     };
 
-    const abrirModalNfe = (venda) => {
-        const cliente = clientes.find(c => c.id === venda.cliente_id);
-        setVendaParaNfe(venda);
-        setClienteParaNfe(cliente);
-        setNfeModalOpen(true);
-    };
 
     // 1. Filtra pelo escopo do usuário, sempre respeitando a loja atribuída.
     const vendasPermitidas = filterData(vendas, {
@@ -750,11 +752,15 @@ export default function Vendas() {
         ...venda,
         financeiro: getVendaFinanceiro(venda, { entregas, lancamentos }),
         resumoLogistico: getVendaResumoLogistico(venda, { entregas, montagens })
+    })).map((venda) => ({
+        ...venda,
+        orderStage: getOrderStage(venda)
     }));
 
     // 2. Filtros de Busca e Status da Tela (exclui cancelados da aba principal)
     const filtered = vendasComResumo.filter(v => {
         if (isVendaCancelada(v)) return false;
+        if (orderStageFilter !== 'all' && v.orderStage !== orderStageFilter) return false;
         if (statusFilter === 'aguardando_conferencia') {
             // Filtro especial: apenas aguardando conferência de caixa
             if (!isAguardandoConferencia(v)) return false;
@@ -762,6 +768,31 @@ export default function Vendas() {
             if (statusFilter !== 'all' && v.financeiro.displayStatus !== statusFilter) return false;
         }
         if (search && !v.cliente_nome?.toLowerCase().includes(search.toLowerCase()) && !v.numero_pedido?.includes(search)) return false;
+        if (sellerFilter !== 'all') {
+            const selectedSeller = users.find((seller) => String(seller.id || '').toLowerCase() === sellerFilter.toLowerCase());
+            const sellerIdentifiers = [selectedSeller?.id, selectedSeller?.email].filter(Boolean).map((value) => String(value).toLowerCase());
+            if (!sellerIdentifiers.includes(String(v.responsavel_id || '').toLowerCase())) return false;
+        }
+        if (paymentFilter !== 'all') {
+            const paymentMethods = [
+                v.forma_pagamento,
+                v.forma_pagamento_entrega,
+                ...(Array.isArray(v.pagamentos) ? v.pagamentos.map((pagamento) => pagamento?.forma_pagamento) : [])
+            ].map(normalizeOrderText);
+            if (!paymentMethods.includes(normalizeOrderText(paymentFilter))) return false;
+        }
+        if (periodFilter !== 'all') {
+            const saleDate = new Date(v.data_venda || 0);
+            if (Number.isNaN(saleDate.getTime())) return false;
+            const today = new Date();
+            if (periodFilter === 'month' && !isCurrentMonth(saleDate)) return false;
+            if (periodFilter === 'week') {
+                const sevenDaysAgo = new Date(today);
+                sevenDaysAgo.setHours(0, 0, 0, 0);
+                sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+                if (saleDate < sevenDaysAgo || saleDate > today) return false;
+            }
+        }
         return true;
     });
 
@@ -769,6 +800,27 @@ export default function Vendas() {
     const filteredCancelados = vendasComResumo.filter(v => {
         if (!isVendaCancelada(v)) return false;
         if (search && !v.cliente_nome?.toLowerCase().includes(search.toLowerCase()) && !v.numero_pedido?.includes(search)) return false;
+        if (sellerFilter !== 'all') {
+            const selectedSeller = users.find((seller) => String(seller.id || '').toLowerCase() === sellerFilter.toLowerCase());
+            const sellerIdentifiers = [selectedSeller?.id, selectedSeller?.email].filter(Boolean).map((value) => String(value).toLowerCase());
+            if (!sellerIdentifiers.includes(String(v.responsavel_id || '').toLowerCase())) return false;
+        }
+        if (paymentFilter !== 'all') {
+            const paymentMethods = [v.forma_pagamento, v.forma_pagamento_entrega, ...(Array.isArray(v.pagamentos) ? v.pagamentos.map((pagamento) => pagamento?.forma_pagamento) : [])].map(normalizeOrderText);
+            if (!paymentMethods.includes(normalizeOrderText(paymentFilter))) return false;
+        }
+        if (periodFilter !== 'all') {
+            const saleDate = new Date(v.data_venda || 0);
+            if (Number.isNaN(saleDate.getTime())) return false;
+            const today = new Date();
+            if (periodFilter === 'month' && !isCurrentMonth(saleDate)) return false;
+            if (periodFilter === 'week') {
+                const sevenDaysAgo = new Date(today);
+                sevenDaysAgo.setHours(0, 0, 0, 0);
+                sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6);
+                if (saleDate < sevenDaysAgo || saleDate > today) return false;
+            }
+        }
         return true;
     });
 
@@ -811,11 +863,57 @@ export default function Vendas() {
     const sortedFiltered = React.useMemo(() => sortVendas(filtered), [filtered, sortVendas]);
     const sortedFilteredCancelados = React.useMemo(() => sortVendas(filteredCancelados), [filteredCancelados, sortVendas]);
 
+    const activeSortedVendas = activeTab === 'cancelados' ? sortedFilteredCancelados : sortedFiltered;
+    const totalPages = Math.max(1, Math.ceil(activeSortedVendas.length / pageSize));
+    const pageStart = (Math.min(currentPage, totalPages) - 1) * pageSize;
+    const paginatedVendas = activeSortedVendas.slice(pageStart, pageStart + pageSize);
+    const selectedDashboardVenda = paginatedVendas.find((venda) => venda.id === selectedDashboardVendaId) || paginatedVendas[0] || null;
+
+    const dashboardStats = React.useMemo(() => {
+        const total = vendasComResumo.length;
+        const byStage = (stage) => vendasComResumo.filter((venda) => venda.orderStage === stage);
+        const deliveredThisMonth = byStage('entregue').filter((venda) => {
+            const deliveryDate = venda.resumoLogistico?.entregaPrincipal?.data_realizada
+                || venda.resumoLogistico?.entregaPrincipal?.data_agendada;
+            return isCurrentMonth(deliveryDate);
+        }).length;
+
+        return {
+            total,
+            andamento: byStage('andamento').length,
+            producao: byStage('producao').length,
+            saiu_entrega: byStage('saiu_entrega').length,
+            entregue: deliveredThisMonth,
+            cancelado: byStage('cancelado').length,
+        };
+    }, [vendasComResumo]);
+
+    const dashboardPercent = React.useCallback((value) => {
+        if (!dashboardStats.total) return '0%';
+        return `${((value / dashboardStats.total) * 100).toLocaleString('pt-BR', { maximumFractionDigits: 1 })}%`;
+    }, [dashboardStats.total]);
+
+    React.useEffect(() => {
+        setCurrentPage(1);
+    }, [search, statusFilter, orderStageFilter, periodFilter, sellerFilter, paymentFilter, activeTab, pageSize]);
+
+    React.useEffect(() => {
+        if (!paginatedVendas.length) {
+            setSelectedDashboardVendaId(null);
+            return;
+        }
+        if (!paginatedVendas.some((venda) => venda.id === selectedDashboardVendaId)) {
+            setSelectedDashboardVendaId(paginatedVendas[0].id);
+        }
+    }, [paginatedVendas, selectedDashboardVendaId]);
+
     const selectedVendas = sortedFiltered.filter((v) => selectedVendaIds.includes(v.id));
     const selectedIdsSet = new Set(selectedVendaIds);
     const showBulkSelectionColumn = canUseBulkActions && activeTab === 'vendas';
-    const allVisibleSelected = sortedFiltered.length > 0 && selectedVendaIds.length === sortedFiltered.length;
-    const someVisibleSelected = selectedVendaIds.length > 0 && !allVisibleSelected;
+    const visibleVendaIds = paginatedVendas.map((venda) => venda.id);
+    const selectedVisibleCount = visibleVendaIds.filter((id) => selectedIdsSet.has(id)).length;
+    const allVisibleSelected = visibleVendaIds.length > 0 && selectedVisibleCount === visibleVendaIds.length;
+    const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
     const tableColSpanVendas = showBulkSelectionColumn ? 12 : 11;
     const vendedoresDisponiveis = users.filter((u) => u?.id);
     const lojasDisponiveis = React.useMemo(() => {
@@ -861,7 +959,10 @@ export default function Vendas() {
     };
 
     const handleSelectAllVendas = (checked) => {
-        setSelectedVendaIds(checked ? sortedFiltered.map((v) => v.id) : []);
+        setSelectedVendaIds((prev) => {
+            const withoutVisible = prev.filter((id) => !visibleVendaIds.includes(id));
+            return checked ? [...withoutVisible, ...visibleVendaIds] : withoutVisible;
+        });
     };
 
     const handleSortChange = (key) => {
@@ -1299,21 +1400,410 @@ export default function Vendas() {
         setBulkStatusMontagemForm({ status: 'pendente' });
     };
 
+    const getSellerName = (venda) => {
+        if (!venda?.responsavel_id) return '-';
+        const responsavelId = String(venda.responsavel_id).toLowerCase();
+        const seller = users.find((item) =>
+            String(item.id || '').toLowerCase() === responsavelId
+            || String(item.email || '').toLowerCase() === responsavelId
+        );
+        return seller?.full_name || seller?.email || '-';
+    };
+
+    const handleExportPedidos = async () => {
+        if (!activeSortedVendas.length) {
+            toast.warning('Não há pedidos no filtro atual para exportar.');
+            return;
+        }
+
+        try {
+            const XLSX = await import('xlsx');
+            const rows = activeSortedVendas.map((venda) => ({
+                Pedido: venda.numero_pedido || '',
+                Cliente: formatarNome(venda.cliente_nome || ''),
+                Telefone: formatarTelefone(venda.cliente_telefone || ''),
+                Data: formatarDataExibicao(venda.data_venda),
+                Produtos: (venda.itens || []).map((item) => `${item.quantidade || 0}x ${buildProductDisplayName(item.produto_nome || item.nome, item.modelo_referencia)}`).join(' | '),
+                Valor: toMoneyNumber(venda.valor_total),
+                Status: ORDER_STAGE_META[venda.orderStage]?.label || venda.status || '',
+                Pagamento: venda.financeiro?.displayStatus || '',
+                'Previsão de entrega': formatarDataExibicao(venda.resumoLogistico?.entregaPrincipal?.data_agendada) || '',
+                Vendedor: getSellerName(venda),
+                Loja: venda.loja || '',
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(rows);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, 'Pedidos');
+            XLSX.writeFile(workbook, `pedidos-${obterDataLocalString()}.xlsx`);
+        } catch (error) {
+            console.error('Erro ao exportar pedidos:', error);
+            toast.error('Não foi possível exportar os pedidos.');
+        }
+    };
+
+    const handleStageTab = (stage) => {
+        if (stage === 'cancelado') {
+            setActiveTab('cancelados');
+            setOrderStageFilter('all');
+            return;
+        }
+        setActiveTab('vendas');
+        setOrderStageFilter(stage);
+    };
+
     return (
-        <div className="max-w-7xl mx-auto space-y-6">
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Vendas</h1>
-                    <p className="text-sm text-gray-500">Gerencie suas vendas e pedidos</p>
+        <div className="w-full max-w-[1680px] mx-auto space-y-5">
+
+            {activeTab !== 'arquivo' && (
+                <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+                        {[
+                            { key: 'all', label: 'Todos os pedidos', value: dashboardStats.total, icon: FileText, tone: 'emerald', detail: 'Total no seu acesso' },
+                            { key: 'andamento', label: 'Em andamento', value: dashboardStats.andamento, icon: Clock, tone: 'emerald', detail: `${dashboardPercent(dashboardStats.andamento)} do total` },
+                            { key: 'producao', label: 'Em produção', value: dashboardStats.producao, icon: Package, tone: 'amber', detail: `${dashboardPercent(dashboardStats.producao)} do total` },
+                            { key: 'saiu_entrega', label: 'Saiu para entrega', value: dashboardStats.saiu_entrega, icon: Truck, tone: 'sky', detail: `${dashboardPercent(dashboardStats.saiu_entrega)} do total` },
+                            { key: 'entregue', label: 'Entregues (mês)', value: dashboardStats.entregue, icon: CheckCircle, tone: 'emerald', detail: `${dashboardPercent(dashboardStats.entregue)} do total` },
+                            { key: 'cancelado', label: 'Cancelados', value: dashboardStats.cancelado, icon: XCircle, tone: 'rose', detail: `${dashboardPercent(dashboardStats.cancelado)} do total` },
+                        ].map((stat) => {
+                            const Icon = stat.icon;
+                            const iconStyles = {
+                                emerald: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40 dark:text-emerald-400',
+                                amber: 'bg-amber-50 text-amber-600 dark:bg-amber-950/40 dark:text-amber-400',
+                                sky: 'bg-sky-50 text-sky-600 dark:bg-sky-950/40 dark:text-sky-400',
+                                rose: 'bg-rose-50 text-rose-600 dark:bg-rose-950/40 dark:text-rose-400',
+                            };
+                            return (
+                                <button
+                                    type="button"
+                                    key={stat.key}
+                                    onClick={() => handleStageTab(stat.key)}
+                                    className="group rounded-xl border border-slate-200/80 bg-white p-3.5 text-left shadow-[0_1px_2px_rgba(15,23,42,0.03)] transition hover:-translate-y-0.5 hover:border-emerald-200 hover:shadow-sm dark:border-neutral-800 dark:bg-neutral-900"
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${iconStyles[stat.tone]}`}>
+                                            <Icon className="h-4 w-4" />
+                                        </span>
+                                        <span className="min-w-0">
+                                            <span className="block truncate text-[11px] font-medium text-slate-500 dark:text-slate-400">{stat.label}</span>
+                                            <span className="mt-0.5 block text-xl font-bold leading-none text-slate-900 dark:text-white">{stat.value}</span>
+                                            <span className="mt-1 block truncate text-[10px] text-slate-400 dark:text-slate-500">{stat.detail}</span>
+                                        </span>
+                                    </div>
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200/80 bg-white shadow-[0_1px_3px_rgba(15,23,42,0.04)] dark:border-neutral-800 dark:bg-neutral-900">
+                        <div className="flex items-center justify-between gap-4 border-b border-slate-100 px-4 dark:border-neutral-800">
+                            <div className="flex min-w-0 items-center gap-6 overflow-x-auto">
+                                {[
+                                    { key: 'all', label: 'Todos' },
+                                    { key: 'andamento', label: 'Em andamento' },
+                                    { key: 'producao', label: 'Em produção' },
+                                    { key: 'saiu_entrega', label: 'Saiu para entrega' },
+                                    { key: 'entregue', label: 'Entregues' },
+                                    { key: 'cancelado', label: 'Cancelados' },
+                                ].map((tabItem) => {
+                                    const isActive = tabItem.key === 'cancelado'
+                                        ? activeTab === 'cancelados'
+                                        : activeTab === 'vendas' && orderStageFilter === tabItem.key;
+                                    return (
+                                        <button
+                                            type="button"
+                                            key={tabItem.key}
+                                            onClick={() => handleStageTab(tabItem.key)}
+                                            className={`relative h-12 shrink-0 text-xs font-medium transition-colors ${isActive ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white'}`}
+                                        >
+                                            {tabItem.label}
+                                            {isActive && <span className="absolute inset-x-0 bottom-0 h-0.5 rounded-full bg-emerald-500" />}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setActiveTab('arquivo')}
+                                className="hidden shrink-0 items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-emerald-700 sm:flex dark:text-slate-400 dark:hover:text-emerald-400"
+                            >
+                                <Archive className="h-3.5 w-3.5" />
+                                Arquivo
+                            </button>
+                        </div>
+
+                        <div className="flex flex-col gap-3 border-b border-slate-100 p-4 dark:border-neutral-800">
+                            <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                                <div className="relative w-full xl:max-w-sm">
+                                    <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                                    <Input
+                                        placeholder="Buscar pedido, cliente, produto..."
+                                        className="h-9 rounded-lg border-slate-200 bg-white pl-9 text-xs shadow-none dark:border-neutral-700 dark:bg-neutral-950"
+                                        value={search}
+                                        onChange={(event) => setSearch(event.target.value)}
+                                    />
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Select value={periodFilter} onValueChange={setPeriodFilter}>
+                                        <SelectTrigger className="h-9 w-[126px] rounded-lg border-slate-200 text-xs shadow-none dark:border-neutral-700">
+                                            <CalendarDays className="mr-1.5 h-3.5 w-3.5 text-slate-400" />
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">Período</SelectItem>
+                                            <SelectItem value="week">Últimos 7 dias</SelectItem>
+                                            <SelectItem value="month">Este mês</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                    <Select value={statusFilter} onValueChange={setStatusFilter}>
+                                        <SelectTrigger className="h-9 w-[138px] rounded-lg border-slate-200 text-xs shadow-none dark:border-neutral-700">
+                                            <Filter className="mr-1.5 h-3.5 w-3.5 text-slate-400" />
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">Pagamento</SelectItem>
+                                            <SelectItem value="Pagamento Pendente">Pendente</SelectItem>
+                                            <SelectItem value="Pago">Pago</SelectItem>
+                                            {conferenciaCaixaEnabled && <SelectItem value="aguardando_conferencia">Ag. conferência</SelectItem>}
+                                        </SelectContent>
+                                    </Select>
+                                    <Select value={sellerFilter} onValueChange={setSellerFilter}>
+                                        <SelectTrigger className="h-9 w-[138px] rounded-lg border-slate-200 text-xs shadow-none dark:border-neutral-700">
+                                            <SelectValue placeholder="Vendedor" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">Vendedor</SelectItem>
+                                            {vendedoresDisponiveis.map((seller) => (
+                                                <SelectItem key={seller.id} value={String(seller.id).toLowerCase()}>{seller.full_name || seller.email}</SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
+                                    <Select value={paymentFilter} onValueChange={setPaymentFilter}>
+                                        <SelectTrigger className="h-9 w-[158px] rounded-lg border-slate-200 text-xs shadow-none dark:border-neutral-700">
+                                            <SelectValue placeholder="Forma de pagamento" />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                            <SelectItem value="all">Forma de pagamento</SelectItem>
+                                            {SALES_PAYMENT_OPTIONS.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}
+                                        </SelectContent>
+                                    </Select>
+                                    <Button variant="outline" className="h-9 rounded-lg border-slate-200 px-3 text-xs font-medium shadow-none dark:border-neutral-700" onClick={handleExportPedidos}>
+                                        <Download className="mr-1.5 h-3.5 w-3.5" />
+                                        Exportar
+                                    </Button>
+                                    {canCreateVendas && (
+                                        <Button className="h-9 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white shadow-none hover:bg-emerald-700" onClick={() => navigate('/admin/PDV')}>
+                                            <Plus className="mr-1.5 h-3.5 w-3.5" />
+                                            Novo pedido
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {showBulkSelectionColumn && selectedVendaIds.length > 0 && (
+                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-emerald-100 bg-emerald-50/60 px-4 py-3 dark:border-emerald-950 dark:bg-emerald-950/20">
+                                <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-300">{selectedVendaIds.length} pedido(s) selecionado(s)</span>
+                                <div className="flex flex-wrap gap-2">
+                                    {canCancelVendas && <Button size="sm" variant="destructive" onClick={handleBulkCancelar} disabled={isBulkRunning || cancelarVendaMutation.isPending}>Cancelar</Button>}
+                                    {canManageVendas && <Button size="sm" variant="outline" onClick={() => setBulkTransferVendedorOpen(true)} disabled={isBulkRunning}>Transferir vendedor</Button>}
+                                    {canManageVendas && <Button size="sm" variant="outline" onClick={() => setBulkTransferLojaOpen(true)} disabled={isBulkRunning}>Transferir loja</Button>}
+                                    {canManagePayments && <Button size="sm" variant="outline" onClick={() => setBulkPagamentoOpen(true)} disabled={isBulkRunning}>Registrar pagamento</Button>}
+                                    {canManageDeliveryStatus && <Button size="sm" variant="outline" onClick={() => setBulkStatusEntregaOpen(true)} disabled={isBulkRunning}>Status da entrega</Button>}
+                                    {canManageDeliveryStatus && <Button size="sm" variant="outline" onClick={() => setBulkStatusMontagemOpen(true)} disabled={isBulkRunning}>Status da montagem</Button>}
+                                    <Button size="sm" variant="outline" onClick={handleBulkLiberarEntrega} disabled={isBulkRunning}>Liberar entrega</Button>
+                                    <Button size="sm" variant="ghost" onClick={() => setSelectedVendaIds([])} disabled={isBulkRunning}>Limpar</Button>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className={`grid min-h-[460px] ${isDashboardDetailOpen && selectedDashboardVenda ? 'xl:grid-cols-[minmax(0,1fr)_300px]' : 'grid-cols-1'}`}>
+                            <div className="min-w-0 overflow-hidden">
+                                <div className="overflow-x-auto">
+                                    <Table>
+                                        <TableHeader>
+                                            <TableRow className="border-slate-100 bg-slate-50/70 hover:bg-slate-50/70 dark:border-neutral-800 dark:bg-neutral-950/50">
+                                                {showBulkSelectionColumn && (
+                                                    <TableHead className="w-10 pl-4">
+                                                        <Checkbox checked={allVisibleSelected ? true : (someVisibleSelected ? 'indeterminate' : false)} onCheckedChange={(checked) => handleSelectAllVendas(checked === true)} aria-label="Selecionar pedidos visíveis" />
+                                                    </TableHead>
+                                                )}
+                                                {renderSortableHeader('Pedido', 'pedido', 'w-[105px]')}
+                                                {renderSortableHeader('Cliente', 'cliente', 'min-w-[170px]')}
+                                                <TableHead className="min-w-[190px] text-[10px] font-semibold uppercase tracking-wide text-slate-400">Produtos</TableHead>
+                                                {renderSortableHeader('Valor', 'total', 'w-[115px]')}
+                                                <TableHead className="w-[130px] text-[10px] font-semibold uppercase tracking-wide text-slate-400">Status</TableHead>
+                                                <TableHead className="w-[120px] text-[10px] font-semibold uppercase tracking-wide text-slate-400">Previsão entrega</TableHead>
+                                                <TableHead className="w-[130px] text-[10px] font-semibold uppercase tracking-wide text-slate-400">Vendedor</TableHead>
+                                                <TableHead className="w-14 text-right text-[10px] font-semibold uppercase tracking-wide text-slate-400">Ações</TableHead>
+                                            </TableRow>
+                                        </TableHeader>
+                                        <TableBody>
+                                            {isLoading ? (
+                                                <TableRow><TableCell colSpan={showBulkSelectionColumn ? 9 : 8} className="h-56 text-center text-sm text-slate-500"><Loader2 className="mx-auto mb-2 h-5 w-5 animate-spin" />Carregando pedidos...</TableCell></TableRow>
+                                            ) : paginatedVendas.length === 0 ? (
+                                                <TableRow><TableCell colSpan={showBulkSelectionColumn ? 9 : 8} className="h-56 text-center text-sm text-slate-500"><Package className="mx-auto mb-2 h-8 w-8 text-slate-300" />Nenhum pedido encontrado.</TableCell></TableRow>
+                                            ) : paginatedVendas.map((venda) => {
+                                                const firstItem = (venda.itens || [])[0];
+                                                const firstImage = firstItem?.fotos?.[0] || firstItem?.foto || firstItem?.imagem_url || firstItem?.produto_imagem;
+                                                const stageMeta = ORDER_STAGE_META[venda.orderStage] || ORDER_STAGE_META.andamento;
+                                                const deliveryDate = venda.resumoLogistico?.entregaPrincipal?.data_agendada;
+                                                const sellerName = getSellerName(venda);
+                                                return (
+                                                    <TableRow
+                                                        key={venda.id}
+                                                        onClick={() => { setSelectedDashboardVendaId(venda.id); setIsDashboardDetailOpen(true); }}
+                                                        className={`cursor-pointer border-slate-100 transition-colors dark:border-neutral-800 ${selectedDashboardVenda?.id === venda.id && isDashboardDetailOpen ? 'bg-emerald-50/50 hover:bg-emerald-50/70 dark:bg-emerald-950/10' : 'hover:bg-slate-50/70 dark:hover:bg-neutral-800/50'}`}
+                                                    >
+                                                        {showBulkSelectionColumn && <TableCell className="pl-4" onClick={(event) => event.stopPropagation()}><Checkbox checked={selectedIdsSet.has(venda.id)} onCheckedChange={(checked) => handleToggleSelectVenda(venda.id, checked === true)} aria-label={`Selecionar pedido ${venda.numero_pedido}`} /></TableCell>}
+                                                        <TableCell>
+                                                            <div className="font-semibold text-slate-900 dark:text-white">#{venda.numero_pedido}</div>
+                                                            <div className="mt-0.5 text-[10px] text-slate-400">{formatarDataExibicao(venda.data_venda)}</div>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className="truncate text-xs font-medium text-slate-800 dark:text-slate-100">{formatarNome(venda.cliente_nome)}</div>
+                                                            <div className="mt-0.5 truncate text-[10px] text-slate-400">{formatarTelefone(venda.cliente_telefone) || venda.loja || '-'}</div>
+                                                        </TableCell>
+                                                        <TableCell>
+                                                            <div className="flex items-center gap-2.5">
+                                                                <div className="flex h-9 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 dark:bg-neutral-800">
+                                                                    {firstImage ? <img src={firstImage} alt="" className="h-full w-full object-cover" /> : <Package className="h-4 w-4 text-slate-400" />}
+                                                                </div>
+                                                                <div className="min-w-0">
+                                                                    <div className="truncate text-[11px] font-medium text-slate-700 dark:text-slate-200">{firstItem ? buildProductDisplayName(firstItem.produto_nome || firstItem.nome, firstItem.modelo_referencia) : 'Sem itens informados'}</div>
+                                                                    <div className="mt-0.5 text-[10px] text-slate-400">{(venda.itens || []).length > 1 ? `+${(venda.itens || []).length - 1} item(ns)` : `${firstItem?.quantidade || 0} unidade(s)`}</div>
+                                                                </div>
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-xs font-semibold text-slate-900 dark:text-white">R$ {toMoneyNumber(venda.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</TableCell>
+                                                        <TableCell><Badge variant="outline" className={`whitespace-nowrap border px-2 py-0.5 text-[9px] font-semibold ${stageMeta.className}`}>{stageMeta.label}</Badge></TableCell>
+                                                        <TableCell className="text-[11px] text-slate-500 dark:text-slate-400">{deliveryDate ? formatarDataExibicao(deliveryDate) : '-'}</TableCell>
+                                                        <TableCell>
+                                                            <div className="flex items-center gap-2">
+                                                                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[9px] font-bold text-slate-500 dark:bg-neutral-800 dark:text-slate-300">{sellerName !== '-' ? sellerName.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase() : '-'}</span>
+                                                                <span className="max-w-[92px] truncate text-[11px] text-slate-600 dark:text-slate-300">{sellerName}</span>
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-right" onClick={(event) => event.stopPropagation()}>
+                                                            <div className="flex justify-end gap-1">
+                                                                {conferenciaCaixaEnabled && isAguardandoConferencia(venda) && <Button variant="ghost" size="icon" className="h-7 w-7 text-amber-600" title="Editar antes da conferência" onClick={() => { setEdicaoPedidoVenda(venda); setIsEdicaoPedidoOpen(true); }}><Edit2 className="h-3.5 w-3.5" /></Button>}
+                                                                <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-500" title="Ações do pedido" onClick={() => setModalAcoesVenda(venda)}><MoreHorizontal className="h-4 w-4" /></Button>
+                                                            </div>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                );
+                                            })}
+                                        </TableBody>
+                                    </Table>
+                                </div>
+
+                                <div className="flex flex-col gap-3 border-t border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-neutral-800">
+                                    <span className="text-[10px] text-slate-400">Mostrando {activeSortedVendas.length ? pageStart + 1 : 0} a {Math.min(pageStart + pageSize, activeSortedVendas.length)} de {activeSortedVendas.length} pedidos</span>
+                                    <div className="flex items-center gap-2">
+                                        <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+                                            <SelectTrigger className="h-7 w-[96px] text-[10px]"><SelectValue /></SelectTrigger>
+                                            <SelectContent><SelectItem value="10">10 por página</SelectItem><SelectItem value="20">20 por página</SelectItem><SelectItem value="50">50 por página</SelectItem></SelectContent>
+                                        </Select>
+                                        <Button variant="outline" size="icon" className="h-7 w-7" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}><ChevronLeft className="h-3.5 w-3.5" /></Button>
+                                        <span className="min-w-14 text-center text-[10px] text-slate-500">{Math.min(currentPage, totalPages)} / {totalPages}</span>
+                                        <Button variant="outline" size="icon" className="h-7 w-7" disabled={currentPage >= totalPages} onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}><ChevronRight className="h-3.5 w-3.5" /></Button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {isDashboardDetailOpen && selectedDashboardVenda && (() => {
+                                const venda = selectedDashboardVenda;
+                                const stageMeta = ORDER_STAGE_META[venda.orderStage] || ORDER_STAGE_META.andamento;
+                                const entrega = venda.resumoLogistico?.entregaPrincipal;
+                                const subtotal = toMoneyNumber(venda.subtotal ?? venda.valor_subtotal ?? venda.valor_total);
+                                const discount = toMoneyNumber(venda.desconto ?? venda.valor_desconto);
+                                const freight = toMoneyNumber(venda.valor_frete ?? venda.frete);
+                                const phoneDigits = String(venda.cliente_telefone || '').replace(/\D/g, '');
+                                const whatsappPhone = phoneDigits.startsWith('55') ? phoneDigits : `55${phoneDigits}`;
+                                return (
+                                    <aside className="border-l border-slate-100 bg-white dark:border-neutral-800 dark:bg-neutral-900">
+                                        <div className="flex items-start justify-between border-b border-slate-100 p-4 dark:border-neutral-800">
+                                            <div>
+                                                <h3 className="text-sm font-bold text-slate-900 dark:text-white">Pedido #{venda.numero_pedido}</h3>
+                                                <Badge variant="outline" className={`mt-2 border px-2 py-0.5 text-[9px] font-semibold ${stageMeta.className}`}>{stageMeta.label}</Badge>
+                                            </div>
+                                            <Button variant="ghost" size="icon" className="h-7 w-7 text-slate-400" aria-label="Fechar detalhes" onClick={() => setIsDashboardDetailOpen(false)}><XCircle className="h-4 w-4" /></Button>
+                                        </div>
+                                        <div className="max-h-[610px] space-y-5 overflow-y-auto p-4">
+                                            <section>
+                                                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Cliente</span>
+                                                <div className="mt-2 flex items-center justify-between gap-3">
+                                                    <div className="min-w-0">
+                                                        <div className="truncate text-xs font-semibold text-slate-800 dark:text-slate-100">{formatarNome(venda.cliente_nome)}</div>
+                                                        <div className="mt-0.5 text-[10px] text-slate-400">{formatarTelefone(venda.cliente_telefone) || 'Telefone não informado'}</div>
+                                                    </div>
+                                                    {phoneDigits && (
+                                                        <div className="flex gap-1">
+                                                            <a href={`https://wa.me/${whatsappPhone}`} target="_blank" rel="noreferrer" className="flex h-7 w-7 items-center justify-center rounded-md text-emerald-600 hover:bg-emerald-50" title="Abrir WhatsApp"><MessageCircle className="h-3.5 w-3.5" /></a>
+                                                            <a href={`tel:${phoneDigits}`} className="flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:bg-slate-100" title="Ligar"><Phone className="h-3.5 w-3.5" /></a>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </section>
+
+                                            <section>
+                                                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Resumo do pedido</span>
+                                                <dl className="mt-2 space-y-2 text-[10px]">
+                                                    <div className="flex justify-between gap-3"><dt className="text-slate-400">Data do pedido</dt><dd className="text-right font-medium text-slate-600 dark:text-slate-300">{formatarDataExibicao(venda.data_venda)}</dd></div>
+                                                    <div className="flex justify-between gap-3"><dt className="text-slate-400">Previsão de entrega</dt><dd className="text-right font-medium text-slate-600 dark:text-slate-300">{entrega?.data_agendada ? formatarDataExibicao(entrega.data_agendada) : 'Não agendada'}</dd></div>
+                                                    <div className="flex justify-between gap-3"><dt className="text-slate-400">Forma de pagamento</dt><dd className="max-w-[150px] truncate text-right font-medium text-slate-600 dark:text-slate-300">{venda.forma_pagamento || 'Não informada'}</dd></div>
+                                                    <div className="flex justify-between gap-3"><dt className="text-slate-400">Vendedor</dt><dd className="max-w-[150px] truncate text-right font-medium text-slate-600 dark:text-slate-300">{getSellerName(venda)}</dd></div>
+                                                </dl>
+                                            </section>
+
+                                            <section>
+                                                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Itens do pedido ({(venda.itens || []).length})</span>
+                                                <div className="mt-2 space-y-3">
+                                                    {(venda.itens || []).map((item, index) => {
+                                                        const image = item?.fotos?.[0] || item?.foto || item?.imagem_url || item?.produto_imagem;
+                                                        const unitValue = toMoneyNumber(item.preco_unitario ?? item.valor_unitario ?? item.preco);
+                                                        return (
+                                                            <div key={item.id || `${item.produto_id || 'item'}-${index}`} className="flex gap-2.5">
+                                                                <div className="flex h-10 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-slate-100 dark:bg-neutral-800">{image ? <img src={image} alt="" className="h-full w-full object-cover" /> : <Package className="h-4 w-4 text-slate-400" />}</div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="line-clamp-2 text-[10px] font-medium leading-4 text-slate-700 dark:text-slate-200">{buildProductDisplayName(item.produto_nome || item.nome, item.modelo_referencia)}</div>
+                                                                    <div className="mt-0.5 flex justify-between text-[9px] text-slate-400"><span>Qtd. {item.quantidade || 0}</span>{unitValue > 0 && <span>R$ {unitValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>}</div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </section>
+
+                                            <section>
+                                                <span className="text-[9px] font-semibold uppercase tracking-wider text-slate-400">Resumo financeiro</span>
+                                                <dl className="mt-2 space-y-2 text-[10px]">
+                                                    <div className="flex justify-between"><dt className="text-slate-400">Subtotal</dt><dd className="font-medium text-slate-600 dark:text-slate-300">R$ {subtotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</dd></div>
+                                                    {discount > 0 && <div className="flex justify-between"><dt className="text-slate-400">Desconto</dt><dd className="font-medium text-rose-600">- R$ {discount.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</dd></div>}
+                                                    {freight > 0 && <div className="flex justify-between"><dt className="text-slate-400">Frete</dt><dd className="font-medium text-slate-600 dark:text-slate-300">R$ {freight.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</dd></div>}
+                                                    <div className="flex justify-between border-t border-slate-100 pt-2 dark:border-neutral-800"><dt className="font-semibold text-slate-700 dark:text-slate-200">Total</dt><dd className="text-sm font-bold text-emerald-600">R$ {toMoneyNumber(venda.valor_total).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</dd></div>
+                                                </dl>
+                                            </section>
+
+                                            <div className="space-y-2 pt-1">
+                                                <Button variant="outline" className="h-9 w-full rounded-lg border-emerald-200 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50" onClick={() => { setSelectedVendaDetalhes(venda); setIsDetalhesModalOpen(true); }}>Ver detalhes completos</Button>
+                                                <Button className="h-9 w-full rounded-lg bg-emerald-600 text-[10px] font-semibold text-white hover:bg-emerald-700" onClick={() => setModalAcoesVenda(venda)}>Ações do pedido <ChevronRight className="ml-1.5 h-3.5 w-3.5" /></Button>
+                                            </div>
+                                        </div>
+                                    </aside>
+                                );
+                            })()}
+                        </div>
+                    </div>
                 </div>
-            </div>
+            )}
+
 
             {/* Sistema de Abas */}
-            <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <Tabs value={activeTab} onValueChange={setActiveTab} className={activeTab === 'arquivo' ? 'block' : 'hidden'}>
                 <TabsList className="grid w-full max-w-lg grid-cols-3">
                     <TabsTrigger value="vendas" className="flex items-center gap-2">
                         <ShoppingCart className="w-4 h-4" />
-                        Vendas
+                        Pedidos
                     </TabsTrigger>
                     <TabsTrigger value="cancelados" className="flex items-center gap-2">
                         <XCircle className="w-4 h-4" />
@@ -1773,15 +2263,6 @@ export default function Vendas() {
                     <ArquivoTab />
                 </TabsContent>
             </Tabs>
-
-            {/* Modal de Emissão de NFe */}
-            <EmitirNFeModal
-                isOpen={nfeModalOpen}
-                onClose={() => setNfeModalOpen(false)}
-                venda={vendaParaNfe}
-                cliente={clienteParaNfe}
-                user={user}
-            />
 
             <VendaDetalhesModal
                 isOpen={isDetalhesModalOpen}
@@ -2420,33 +2901,6 @@ export default function Vendas() {
                                             <CreditCard className="w-4 h-4" />
                                             Registrar/Atualizar Pagamento
                                         </Button>
-                                    )}
-
-                                    {/* Emitir NFe */}
-                                    {financeiro.isPaid && can('manage_vendas') && (
-                                        venda.nfe_emitida ? (
-                                            <div className="flex items-center justify-between px-3 py-2 border rounded-md text-sm text-green-800 bg-green-50 dark:bg-green-950/20 dark:text-green-300">
-                                                <span className="flex items-center gap-2">
-                                                    <CheckCircle className="w-4 h-4" />
-                                                    Nota Fiscal Eletrônica emitida
-                                                </span>
-                                                <Badge className="bg-green-100 text-green-800 border-green-200">
-                                                    NFe {venda.nfe_numero}
-                                                </Badge>
-                                            </div>
-                                        ) : (
-                                            <Button
-                                                variant="outline"
-                                                className="justify-start gap-2 h-11 text-green-600 hover:text-green-700 hover:bg-green-50 dark:hover:bg-green-950/20"
-                                                onClick={() => {
-                                                    abrirModalNfe(venda);
-                                                    setModalAcoesVenda(null);
-                                                }}
-                                            >
-                                                <Receipt className="w-4 h-4" />
-                                                Emitir Nota Fiscal (NFe)
-                                            </Button>
-                                        )
                                     )}
 
                                     {/* Alterar Status da Entrega */}

@@ -354,6 +354,7 @@ export default function Produtos() {
       ...produto,
       id: undefined,
       nome: `${produto.nome} (Cópia)`,
+      sku: '',
       codigo_barras: null,
     };
     setModalMode('edit');

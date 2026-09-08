@@ -16,6 +16,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import ProdutoCadastroCompleto from '@/components/produtos/ProdutoCadastroCompleto';
 import { getColorHex } from '@/components/produtos/FurnitureColorPicker';
 import { toast } from 'sonner';
+import { isValidGTIN, normalizeGTIN, generateSafeSKU } from '@/utils/gtinValidator';
 
 // ─── Audio ────────────────────────────────────────────────────────
 let audioCtx = null;
@@ -66,6 +67,7 @@ async function searchProdutosMultiToken(term) {
         const escaped = kw.replace(/[%_]/g, '');
         query = query.or(
             `nome.ilike.%${escaped}%,` +
+            `sku.ilike.%${escaped}%,` +
             `codigo_barras.ilike.%${escaped}%,` +
             `categoria.ilike.%${escaped}%,` +
             `modelo_referencia.ilike.%${escaped}%,` +
@@ -203,10 +205,17 @@ export default function BipagemTab() {
     // Select existing product from search results
     // ═════════════════════════════════════════════════════════════
     const handleSelectProduct = useCallback(async (product) => {
+        if (!isValidGTIN(pendingGtin)) {
+            toast.error('O código bipado não é um código de barras GTIN oficial válido (8, 12, 13 ou 14 dígitos).');
+            return;
+        }
+
+        const validBarcode = normalizeGTIN(pendingGtin, true);
+
         // Link barcode to this product
         const { error } = await supabase
             .from('produtos')
-            .update({ codigo_barras: pendingGtin })
+            .update({ codigo_barras: validBarcode })
             .eq('id', product.id);
 
         if (error) {
@@ -214,7 +223,7 @@ export default function BipagemTab() {
             return;
         }
 
-        const updatedProduct = { ...product, codigo_barras: pendingGtin };
+        const updatedProduct = { ...product, codigo_barras: validBarcode };
 
         // Check if API has a better name
         if (apiData && apiData.nome && !namesMatch(product.nome, apiData.nome)) {
@@ -223,18 +232,22 @@ export default function BipagemTab() {
         } else {
             // Update NCM/foto if missing from API
             if (apiData) {
-                const updates = {};
-                if (!product.ncm && apiData.ncm) updates.ncm = apiData.ncm;
-                if ((!product.fotos || product.fotos.length === 0) && apiData.foto_url) updates.fotos = [apiData.foto_url];
-                if (Object.keys(updates).length > 0) {
-                    await supabase.from('produtos').update(updates).eq('id', product.id);
-                    Object.assign(updatedProduct, updates);
+                const patch = {};
+                if (!product.ncm && apiData.ncm) patch.ncm = apiData.ncm;
+                if ((!product.fotos || !product.fotos.length) && apiData.foto_url) patch.fotos = [apiData.foto_url];
+                if (Object.keys(patch).length > 0) {
+                    await supabase.from('produtos').update(patch).eq('id', product.id);
+                    Object.assign(updatedProduct, patch);
                 }
             }
             setMatchedProduct(updatedProduct);
             setStep('quantity');
         }
     }, [pendingGtin, apiData]);
+
+    const handleSkipUpdate = useCallback(() => {
+        setStep('quantity');
+    }, []);
 
     // ═════════════════════════════════════════════════════════════
     // Update product from API data
@@ -259,19 +272,20 @@ export default function BipagemTab() {
         setStep('quantity');
     }, [matchedProduct, apiData]);
 
-    const handleSkipUpdate = useCallback(() => {
-        setStep('quantity');
-    }, []);
-
     // ═════════════════════════════════════════════════════════════
     // Create new product flow (via ProdutoModal)
     // ═════════════════════════════════════════════════════════════
     const handleCreateProduct = useCallback(async (formData) => {
         setSavingProduct(true);
         try {
+            const validGtin = (pendingGtin && isValidGTIN(pendingGtin))
+                ? normalizeGTIN(pendingGtin, true)
+                : (formData.codigo_barras && isValidGTIN(formData.codigo_barras) ? normalizeGTIN(formData.codigo_barras, true) : null);
+
             const { data, error } = await supabase.from('produtos').insert({
                 ...formData,
-                codigo_barras: pendingGtin,
+                sku: formData.sku || generateSafeSKU('BIP'),
+                codigo_barras: validGtin,
                 ativo: true,
             }).select().single();
 

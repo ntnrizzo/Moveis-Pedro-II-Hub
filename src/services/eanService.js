@@ -1,5 +1,6 @@
 import { productService } from '@/services/productService';
 import { supabase } from '@/lib/supabase';
+import { isValidGTIN, normalizeGTIN } from '@/utils/gtinValidator';
 
 /**
  * Normaliza dados retornados pela API externa para formato consistente.
@@ -18,8 +19,8 @@ function normalizeApiData(apiData, gtin) {
 
 /**
  * Service to identify products by EAN.
- * 1. Checks internal DB.
- * 2. Checks existing External APIs (Cosmos etc via productService).
+ * 1. Checks internal DB strictly by codigo_barras.
+ * 2. Checks existing External APIs (Cosmos etc via productService) only for valid GTINs.
  * Returns both internal match and API data when available for comparison.
  */
 export const eanService = {
@@ -30,6 +31,8 @@ export const eanService = {
      */
     async lookup(gtin) {
         if (!gtin) return { found: false, source: 'none', product: null, apiData: null };
+        const rawGtin = String(gtin).trim();
+        const validGtin = isValidGTIN(rawGtin) ? normalizeGTIN(rawGtin, true) : rawGtin;
 
         try {
             // Run internal DB check and external API lookup in parallel
@@ -37,12 +40,14 @@ export const eanService = {
                 supabase
                     .from('produtos')
                     .select('*')
-                    .eq('codigo_barras', gtin)
+                    .eq('codigo_barras', validGtin)
                     .maybeSingle(),
-                productService.fetchProductByGtin(gtin).catch(err => {
-                    console.warn('API lookup failed:', err);
-                    return null;
-                })
+                isValidGTIN(rawGtin)
+                    ? productService.fetchProductByGtin(validGtin).catch(err => {
+                        console.warn('API lookup failed:', err);
+                        return null;
+                    })
+                    : Promise.resolve(null)
             ]);
 
             const internal = internalResult.data;

@@ -84,6 +84,17 @@ export default function RelatorioComissoes() {
     queryFn: () => base44.entities.NivelComissaoFaixa.list(),
   });
 
+  const { data: metas = [] } = useQuery({
+    queryKey: ['metas-comissoes', organization?.id, mesInicio, mesFim],
+    enabled: !!organization?.id && user?.cargo === 'Administrador',
+    queryFn: async () => {
+      const { data, error } = await supabase.from('metas_vendas').select('mes, loja, vendedor_id, meta_valor')
+        .eq('organization_id', organization.id).gte('mes', mesInicio + '-01').lte('mes', mesFim + '-01').limit(1000);
+      if (error) throw error;
+      return data;
+    },
+  });
+
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-screen">

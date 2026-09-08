@@ -22,7 +22,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
 export default function ConfiguracaoIntegracoes() {
     const queryClient = useQueryClient();
-    const [showKey, setShowKey] = useState({}); // { google: false, gemini: false }
+    const [showKey, setShowKey] = useState({});
 
     const toggleShowKey = (key) => {
         setShowKey(prev => ({ ...prev, [key]: !prev[key] }));
@@ -30,8 +30,7 @@ export default function ConfiguracaoIntegracoes() {
 
     const [formData, setFormData] = useState({
         google_api_key: "",
-        google_cse_id: "",
-        gemini_api_key: ""
+        google_cse_id: ""
     });
 
     // Buscar configuração existente
@@ -48,8 +47,7 @@ export default function ConfiguracaoIntegracoes() {
         if (config?.dados) {
             setFormData({
                 google_api_key: config.dados.google_api_key || "",
-                google_cse_id: config.dados.google_cse_id || "",
-                gemini_api_key: config.dados.gemini_api_key || ""
+                google_cse_id: config.dados.google_cse_id || ""
             });
         }
     }, [config]);
@@ -108,12 +106,11 @@ export default function ConfiguracaoIntegracoes() {
                                 Google Cloud Services
                             </CardTitle>
                             <CardDescription>
-                                Configure acesso unificado para Busca Customizada (Imagens) e Gemini AI.
+                                Configure a busca de imagens de produtos.
                             </CardDescription>
                         </div>
                         <div className="flex gap-2">
                             {formData.google_api_key && <Badge variant="outline" className="bg-blue-50 text-blue-700 border-blue-200">Search Ativo</Badge>}
-                            {formData.gemini_api_key && <Badge variant="outline" className="bg-purple-50 text-purple-700 border-purple-200">Gemini AI Ativo</Badge>}
                         </div>
                     </div>
                 </CardHeader>
@@ -160,48 +157,6 @@ export default function ConfiguracaoIntegracoes() {
                                 className="bg-white"
                             />
                             <p className="text-xs text-gray-500">ID do mecanismo de busca programável.</p>
-                        </div>
-                    </div>
-
-                    {/* Seção 2: Inteligência Artificial */}
-                    <div className="p-4 bg-purple-50 rounded-lg border border-purple-100">
-                        <h3 className="font-semibold text-gray-900 flex items-center gap-2 mb-4">
-                            <Sparkles className="w-4 h-4 text-purple-600" />
-                            Inteligência Artificial (Gemini AI)
-                        </h3>
-
-                        <div className="space-y-2">
-                            <Label htmlFor="gemini_key">Gemini API Key</Label>
-                            <div className="relative">
-                                <Input
-                                    id="gemini_key"
-                                    type={showKey.gemini ? "text" : "password"}
-                                    value={formData.gemini_api_key}
-                                    onChange={(e) => handleChange('gemini_api_key', e.target.value)}
-                                    placeholder="Cole sua chave do Google AI Studio..."
-                                    className="pr-10 bg-white border-purple-200 focus:border-purple-400 focus:ring-purple-200"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => toggleShowKey('gemini')}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                                >
-                                    {showKey.gemini ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                                </button>
-                            </div>
-                            <div className="flex justify-between items-center mt-1">
-                                <p className="text-xs text-purple-700">
-                                    Habilita sugestão de NCM, descrições automáticas e mais.
-                                </p>
-                                <a
-                                    href="https://aistudio.google.com/app/apikey"
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="text-xs text-purple-600 hover:underline flex items-center gap-1"
-                                >
-                                    Gerar Chave <ExternalLink className="w-3 h-3" />
-                                </a>
-                            </div>
                         </div>
                     </div>
 

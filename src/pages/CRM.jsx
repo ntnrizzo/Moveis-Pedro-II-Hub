@@ -341,16 +341,7 @@ export default function CRM() {
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-12">
       {/* Clean, Professional SaaS Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-gray-200 dark:border-neutral-800 pb-5">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-white tracking-tight flex items-center gap-2.5">
-            <Users className="w-6 h-6 text-green-700 dark:text-green-500" /> CRM & Clientes
-          </h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-            Gestão da base de clientes, métricas de engajamento e controle do portal.
-          </p>
-        </div>
-
+      <div className="flex justify-end gap-4 pb-2">
         <div className="flex items-center gap-2.5">
           <Button
             onClick={() => { setEditingCliente(null); setIsModalOpen(true); }}

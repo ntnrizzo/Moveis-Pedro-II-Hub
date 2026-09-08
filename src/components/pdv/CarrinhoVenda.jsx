@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { base44 } from "@/api/base44Client";
+import { generateSafeSKU } from "@/utils/gtinValidator";
 
 export default function CarrinhoVenda({ itens = [], onRemoveItem, onToggleEntrega, onToggleMontagem, onVincularImagem, onEditProduto, onAtualizarEstoque, onAtualizarQuantidade, onAtualizarProdutoId, onAtualizarItem }) {
   // Estado para o dialog de atualizar estoque
@@ -149,6 +150,8 @@ export default function CarrinhoVenda({ itens = [], onRemoveItem, onToggleEntreg
   const resolverProdutoId = async (index, item) => {
     if (isValidProdutoId(item.produto_id)) return item.produto_id;
     const novoProduto = await base44.entities.Produto.create({
+      sku: generateSafeSKU('PDV'),
+      codigo_barras: null,
       nome: item.produto_nome || 'Produto sem nome',
       preco_venda: item.preco_unitario || 0,
       requer_atencao: true,

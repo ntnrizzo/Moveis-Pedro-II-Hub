@@ -32,10 +32,10 @@ export const ROLE_RULES = {
       'view_orcamentos', 'create_vendas', 'view_produtos', 'manage_produtos', 'view_catalogo',
       'view_montagem', 'view_marketing',
       'view_compras', 'create_oc', 'manage_compras', 'manage_cost_prices', 'approve_oc', 'view_fornecedores',
-      'solicitar_nfe', 'aprovar_nfe', 'emitir_nfe', 'cancelar_nfe', 'corrigir_nfe', 'view_nfe',
-      'solicitar_cancelamento_nfe', 'aprovar_cancelamento_nfe',
-      'solicitar_cce_nfe', 'aprovar_cce_nfe',
-      'solicitar_inutilizacao_nfe', 'aprovar_inutilizacao_nfe'
+      'view_nfe',
+      
+      
+      
     ],
     scope: SCOPES.STORE
   },
@@ -49,10 +49,10 @@ export const ROLE_RULES = {
       'view_montagem', 'view_marketing',
       'view_compras', 'create_oc', 'manage_compras', 'manage_cost_prices', 'send_oc', 'receive_oc', 'view_fornecedores',
       'manage_bulk_price_adjustment',
-      'solicitar_nfe', 'aprovar_nfe', 'emitir_nfe', 'cancelar_nfe', 'corrigir_nfe', 'view_nfe',
-      'solicitar_cancelamento_nfe', 'aprovar_cancelamento_nfe',
-      'solicitar_cce_nfe', 'aprovar_cce_nfe',
-      'solicitar_inutilizacao_nfe', 'aprovar_inutilizacao_nfe',
+      'view_nfe',
+      
+      
+      
       'view_cliente_access_analytics'
     ],
     scope: SCOPES.ALL
@@ -62,8 +62,8 @@ export const ROLE_RULES = {
       'view_dashboard', 'view_vendas', 'create_vendas',
       'view_produtos', 'view_clientes', 'create_clientes',
       'view_orcamentos', 'create_orcamentos', 'view_catalogo',
-      'solicitar_nfe', 'view_nfe',
-      'solicitar_cancelamento_nfe', 'solicitar_cce_nfe'
+      'view_nfe',
+      
     ],
     scope: SCOPES.OWN
   },
@@ -78,10 +78,10 @@ export const ROLE_RULES = {
     can: [
       'view_financeiro', 'manage_financeiro', 'view_vendas',
       'view_clientes', 'view_compras', 'approve_oc', 'view_fornecedores',
-      'solicitar_nfe', 'aprovar_nfe', 'view_nfe',
-      'solicitar_cancelamento_nfe', 'aprovar_cancelamento_nfe',
-      'solicitar_cce_nfe', 'aprovar_cce_nfe',
-      'solicitar_inutilizacao_nfe', 'aprovar_inutilizacao_nfe'
+      'view_nfe',
+      
+      
+      
     ],
     scope: SCOPES.ALL
   },
@@ -248,17 +248,6 @@ export const PERMISSION_CATALOG = [
 
   // NF-e
   { code: 'view_nfe',                     label: 'Ver NF-e',                          category: 'NF-e', description: 'Visualizar notas fiscais emitidas' },
-  { code: 'solicitar_nfe',                label: 'Solicitar Emissão de NF-e',         category: 'NF-e', description: 'Solicitar emissão de notas fiscais' },
-  { code: 'aprovar_nfe',                  label: 'Aprovar NF-e',                      category: 'NF-e', description: 'Aprovar solicitações de notas fiscais' },
-  { code: 'emitir_nfe',                   label: 'Emitir NF-e (SEFAZ)',               category: 'NF-e', description: 'Transmitir notas fiscais à SEFAZ' },
-  { code: 'cancelar_nfe',                 label: 'Cancelar NF-e',                     category: 'NF-e', description: 'Cancelar notas fiscais emitidas' },
-  { code: 'corrigir_nfe',                 label: 'Corrigir NF-e (CC-e)',              category: 'NF-e', description: 'Emitir carta de correção de NF-e' },
-  { code: 'solicitar_cancelamento_nfe',   label: 'Solicitar Cancelamento de NF-e',    category: 'NF-e', description: 'Solicitar cancelamento de nota fiscal' },
-  { code: 'aprovar_cancelamento_nfe',     label: 'Aprovar Cancelamento de NF-e',      category: 'NF-e', description: 'Aprovar cancelamentos de notas fiscais' },
-  { code: 'solicitar_cce_nfe',            label: 'Solicitar CC-e',                    category: 'NF-e', description: 'Solicitar carta de correção de NF-e' },
-  { code: 'aprovar_cce_nfe',              label: 'Aprovar CC-e',                      category: 'NF-e', description: 'Aprovar cartas de correção de NF-e' },
-  { code: 'solicitar_inutilizacao_nfe',   label: 'Solicitar Inutilização de NF-e',    category: 'NF-e', description: 'Solicitar inutilização de numeração de NF-e' },
-  { code: 'aprovar_inutilizacao_nfe',     label: 'Aprovar Inutilização de NF-e',      category: 'NF-e', description: 'Aprovar inutilização de numeração de NF-e' },
 
   // Mobile
   { code: 'view_mobile_entregador', label: 'App Entregador',  category: 'Mobile', description: 'Acesso ao aplicativo móvel de entregas' },
@@ -299,7 +288,7 @@ export const MENU_ITEMS = [
   { title: "Painel Gerencial", url: "/admin/DashboardGerente", icon: Target, permission: 'view_dashboard_gerente', section: "Principal" },
   { title: "PDV", url: "/admin/PDV", icon: CreditCard, permission: 'create_vendas', section: "Principal" },
 
-  { title: "Vendas", url: "/admin/Vendas", icon: ShoppingCart, permission: 'view_vendas', section: "Vendas" },
+  { title: "Pedidos", url: "/admin/Pedidos", icon: ShoppingCart, permission: 'view_vendas', section: "Vendas" },
   { title: "Orçamentos", url: "/admin/Orcamentos", icon: FileText, permission: 'view_orcamentos', section: "Vendas" },
   { title: "CRM", url: "/admin/CRM", icon: Users, permission: 'view_clientes', section: "Vendas" },
 

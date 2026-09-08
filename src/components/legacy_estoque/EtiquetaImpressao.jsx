@@ -177,9 +177,18 @@ export const EtiquetaImpressao = forwardRef(({ empresa, produtos, logoOption = '
                                 {/* Detalhes (60%) */}
                                 <div className="bg-white rounded-xl py-3 px-4 shadow-sm border border-gray-200 flex-[1.5] flex flex-col justify-center min-w-0">
                                     <div className="space-y-1 overflow-hidden">
+                                        {produto.sku ? (
+                                            <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
+                                                SKU: {produto.sku}
+                                            </p>
+                                        ) : produto.codigo_barras ? null : (
+                                            <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
+                                                COD: {produto.id?.substring(0, 8)}
+                                            </p>
+                                        )}
                                         {produto.codigo_barras && (
                                             <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
-                                                COD: {produto.codigo_barras}
+                                                EAN: {produto.codigo_barras}
                                             </p>
                                         )}
                                         <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
@@ -225,9 +234,18 @@ export const EtiquetaImpressao = forwardRef(({ empresa, produtos, logoOption = '
                                 {/* Detalhes do Produto */}
                                 <div className={`bg-white rounded-xl py-2 px-4 ${currentLayout.detailsMargin} shadow-sm w-full border border-gray-200 flex-grow flex flex-col justify-center min-h-0`}>
                                     <div className="space-y-1">
+                                        {produto.sku ? (
+                                            <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
+                                                SKU: {produto.sku}
+                                            </p>
+                                        ) : produto.codigo_barras ? null : (
+                                            <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
+                                                COD: {produto.id?.substring(0, 8)}
+                                            </p>
+                                        )}
                                         {produto.codigo_barras && (
                                             <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>
-                                                COD: {produto.codigo_barras}
+                                                EAN: {produto.codigo_barras}
                                             </p>
                                         )}
                                         <p className={`${currentLayout.detailsSize} font-medium text-gray-700 uppercase leading-snug truncate`}>

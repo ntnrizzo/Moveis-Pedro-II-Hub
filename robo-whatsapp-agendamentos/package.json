@@ -3,7 +3,6 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
     "@supabase/supabase-js": "^2.47.16",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
@@ -11,8 +10,8 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^4.2.1",
+    "puppeteer": "^24.1.1",
     "qrcode-terminal": "^0.12.0",
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main",
-    "puppeteer": "^24.1.1"
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
   }
 }

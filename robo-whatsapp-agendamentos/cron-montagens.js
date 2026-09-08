@@ -1,3 +1,4 @@
+const { getBotJobHeaders } = require('./jobAuth');
 // cron-montagens.js
 // Cron job para enviar lembretes de montagem às 8h da manhã com isolamento multi-tenant
 
@@ -17,7 +18,7 @@ cron.schedule('0 8 * * *', async () => {
     try {
         const hoje = new Date().toISOString().split('T')[0];
         const PORT = process.env.PORT || 3001;
-        const BOT_API_SECRET = process.env.BOT_API_SECRET || '';
+
 
         // 1. Listar todas as organizações
         const { data: orgs, error: orgsError } = await supabase
@@ -53,11 +54,7 @@ cron.schedule('0 8 * * *', async () => {
                 if (!montagem.cliente_telefone) continue;
 
                 try {
-                    const headers = {
-                        'Content-Type': 'application/json',
-                        'x-organization-id': orgId,
-                        ...(BOT_API_SECRET ? { 'x-bot-api-key': BOT_API_SECRET } : {})
-                    };
+                    const headers = await getBotJobHeaders(orgId);
 
                     const response = await fetch(`http://localhost:${PORT}/lembrete-montagem`, {
                         method: 'POST',

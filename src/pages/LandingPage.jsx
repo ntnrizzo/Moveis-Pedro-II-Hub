@@ -10,6 +10,7 @@ import {
     MessageCircle, Menu, X, LogIn, HelpCircle, FileText, Award,
     CreditCard, ArrowDown, Sparkles, MapPin, ShoppingBag, ChevronRight
 } from "lucide-react";
+import gestappMockup from "@/assets/gestapp-mockup.png.png";
 
 // ============================================================================
 // COMPONENTE DE ANIMAÇÃO AO ROLAR (SCROLL REVEAL VIA INTERSECTION OBSERVER)
@@ -68,11 +69,7 @@ function Reveal({ children, className = "", delay = 0, direction = "up" }) {
 function GestAppLogo({ className = "", light = false }) {
     return (
         <div className={`flex items-center gap-2.5 select-none ${className}`}>
-            <img
-                src="https://i.imgur.com/zCHQpim.png"
-                alt="GestApp Logo"
-                className="h-8 sm:h-9 w-auto object-contain flex-shrink-0"
-            />
+            <span className="text-2xl font-bold text-[#1e4a38]">GestApp</span>
         </div>
     );
 }
@@ -214,13 +211,137 @@ function HeroMonitorIllustration() {
 }
 
 // ============================================================================
+// SEÇÃO PROVA SOCIAL COM ANIMAÇÃO DE EXPANSÃO / ESTICAMENTO AO ROLAR
+// ============================================================================
+function ExpandingSocialProofSection() {
+    const sectionRef = useRef(null);
+    const [scrollProgress, setScrollProgress] = useState(0);
+
+    useEffect(() => {
+        let animationFrameId;
+
+        const handleScroll = () => {
+            if (!sectionRef.current) return;
+            const rect = sectionRef.current.getBoundingClientRect();
+            const windowHeight = window.innerHeight;
+
+            // Inicia quando o topo da seção entra no campo de visão (95%)
+            // Completa quando atinge ~20% do topo da janela
+            const start = windowHeight * 0.95;
+            const end = windowHeight * 0.2;
+
+            const progress = (start - rect.top) / (start - end);
+            const clamped = Math.max(0, Math.min(1, progress));
+
+            setScrollProgress(clamped);
+        };
+
+        const onScroll = () => {
+            cancelAnimationFrame(animationFrameId);
+            animationFrameId = requestAnimationFrame(handleScroll);
+        };
+
+        window.addEventListener("scroll", onScroll, { passive: true });
+        handleScroll();
+
+        return () => {
+            window.removeEventListener("scroll", onScroll);
+            cancelAnimationFrame(animationFrameId);
+        };
+    }, []);
+
+    // Interpolação da largura e escala conforme a rolagem do mouse
+    const cardWidth = 78 + scrollProgress * 20; // 78% até 98%
+    const cardRadius = 52 - scrollProgress * 28; // 52px até 24px
+    const cardScale = 0.92 + scrollProgress * 0.08; // 0.92 até 1.0
+
+    return (
+        <section ref={sectionRef} className="py-16 md:py-24 bg-white overflow-hidden flex justify-center items-center">
+            <div
+                style={{
+                    width: `${cardWidth}%`,
+                    maxWidth: "1420px",
+                    borderRadius: `${cardRadius}px`,
+                    transform: `scale(${cardScale})`,
+                    transition: "width 0.12s ease-out, transform 0.12s ease-out, border-radius 0.12s ease-out"
+                }}
+                className="bg-[#1e4a38] text-white p-8 sm:p-14 md:p-16 space-y-10 shadow-[0_25px_60px_-15px_rgba(30,74,56,0.3)] overflow-hidden will-change-transform will-change-[width]"
+            >
+                {/* Cabeçalho Superior: Título + Botão/Ação */}
+                <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+                    <div className="max-w-2xl space-y-3">
+                        <h2 className="text-3xl sm:text-5xl font-normal tracking-tight leading-[1.15] text-white">
+                            Desenvolvido e validado junto com a Móveis Pedro II.
+                        </h2>
+                        <p className="text-emerald-100/70 text-sm sm:text-base font-normal max-w-xl leading-relaxed">
+                            O <b className="text-white">GestApp</b> foi construído no chão de loja de uma das maiores referências do setor, na região serrana do Rio de Janeiro. Unimos tecnologia a mais de 25 anos de pioneirismo e experiência real em vendas, estoque e logística.
+                        </p>
+                    </div>
+                </div>
+
+                {/* Card Interno Grande (Mídia / Imagem de Destaque) */}
+                <div className="relative w-full rounded-3xl bg-[#FFFFFF] border border-white/10 overflow-hidden flex items-center justify-center min-h-[320px] sm:min-h-[420px] p-8">
+                    {/* Imagem da Logo com fundo verde escuro nativo */}
+                    <img
+                        src="https://webra.com.br/wp-content/uploads/2022/09/Webra_Site_MoveisPedroII_01.jpg"
+                        alt="Móveis Pedro II"
+                        className="max-h-48 sm:max-h-64 w-auto object-contain opacity-90 transition-opacity hover:opacity-100 duration-300"
+                    />
+                </div>
+
+                {/* Rodapé de Métricas Minimalistas */}
+                <div className="pt-6 border-t border-white/10 grid grid-cols-2 md:grid-cols-4 gap-6 text-left">
+                    <div>
+                        <p className="text-xs text-emerald-200/60 font-medium">Validação de Mercado</p>
+                        <p className="text-2xl sm:text-3xl font-light text-white mt-1">100% Prático</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-emerald-200/60 font-medium">Expertise Comercial</p>
+                        <p className="text-2xl sm:text-3xl font-light text-white mt-1">+25 Anos</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-emerald-200/60 font-medium">Arquitetura de Dados</p>
+                        <p className="text-2xl sm:text-3xl font-light text-white mt-1">Multi-Filial</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-emerald-200/60 font-medium">Disponibilidade</p>
+                        <p className="text-2xl sm:text-3xl font-light text-white mt-1">Nuvem 24/7</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    );
+}
+
+// ============================================================================
 // PÁGINA PRINCIPAL (LANDING PAGE - ESTILO APPLE COM HEADER TRANSLÚCIDO E BOTÕES FLAT)
 // ============================================================================
+const HERO_SUBTITLES = [
+    "Do orçamento até a entrega. Tudo integrado.",
+    "Acompanhe tudo pelo portal do cliente e ofereça uma experiência premium.",
+    "Menos tempo com planilhas, mais agilidade para expandir e lucrar."
+];
+
 export default function LandingPage() {
     const navigate = useNavigate();
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const [openFaq, setOpenFaq] = useState(null);
-    const [isScrolled, setIsScrolled] = useState(false); // <--- NOVO ESTADO
+    const [isScrolled, setIsScrolled] = useState(false);
+    const [subtitleIndex, setSubtitleIndex] = useState(0);
+    const [fadeSubtitle, setFadeSubtitle] = useState("in");
+
+    // Alternância suave das frases da Hero
+    useEffect(() => {
+        const interval = setInterval(() => {
+            setFadeSubtitle("out");
+            setTimeout(() => {
+                setSubtitleIndex((prev) => (prev + 1) % HERO_SUBTITLES.length);
+                setFadeSubtitle("in");
+            }, 350);
+        }, 3800);
+
+        return () => clearInterval(interval);
+    }, []);
 
     // Detecta o scroll da página
     useEffect(() => {
@@ -279,9 +400,9 @@ export default function LandingPage() {
             {/* ================================================================ */}
             {/* CABEÇALHO / HEADER FLUTUANTE ADAPTÁVEL */}
             <header
-                className={`fixed top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled
+                className={`fixed top-0 left-0 right-0 z-50 transition-all duration-500 ${isScrolled
                     ? "bg-transparent py-3 pointer-events-none"
-                    : "bg-[#1e4a38]/80 backdrop-blur-xl border-b border-[#ccebd5]/40 py-0"
+                    : "bg-[#e7f6ec]/85 backdrop-blur-md border-b border-[#d0edd8]/60 py-0"
                     }`}
             >
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -296,37 +417,47 @@ export default function LandingPage() {
                             <GestAppLogo />
                         </Link>
 
-                        {/* Menu Desktop: Centralizado Absolutamente na Tela */}
-                        {/* Menu Desktop: Pílula Adaptável com fundo branco no topo */}
-                        {/* Menu Desktop: Pílula com fundo alternável e texto verde contínuo */}
+                        {/* Menu Desktop: Espaçado no topo e pílula compacta liquid glass ao rolar */}
                         <div className="hidden md:flex absolute left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 pointer-events-auto">
                             <nav
-                                className={`flex items-center gap-1.5 p-1.5 rounded-full border transition-all duration-300 text-[#1e4a38] ${isScrolled
-                                        ? "bg-white/40 backdrop-blur-xl border-white/50 shadow-lg shadow-emerald-950/10"
-                                        : "bg-white/90 backdrop-blur-md border-white/70 shadow-sm"
+                                className={`flex items-center transition-all duration-300 text-[#1e4a38] ${isScrolled
+                                    ? "gap-1.5 p-1.5 rounded-full border border-white/60 bg-white/40 backdrop-blur-2xl backdrop-saturate-200 shadow-[0_12px_32px_-4px_rgba(30,74,56,0.12),inset_0_1px_1px_0_rgba(255,255,255,0.9)]"
+                                    : "gap-8 lg:gap-10 p-0 bg-transparent border-transparent shadow-none"
                                     }`}
                             >
                                 <button
                                     onClick={() => scrollToSection("pilares")}
-                                    className="px-4 py-2 rounded-full text-xs font-semibold hover:bg-[#1e4a38]/10 transition-all cursor-pointer"
+                                    className={`transition-all duration-300 cursor-pointer ${isScrolled
+                                        ? "px-4 py-2 rounded-full text-xs font-semibold hover:bg-white/60"
+                                        : "px-1 py-1 text-sm font-medium hover:text-[#38a169]"
+                                        }`}
                                 >
                                     Funcionalidades
                                 </button>
                                 <button
                                     onClick={() => scrollToSection("portal-cliente")}
-                                    className="px-4 py-2 rounded-full text-xs font-semibold hover:bg-[#1e4a38]/10 transition-all cursor-pointer"
+                                    className={`transition-all duration-300 cursor-pointer ${isScrolled
+                                        ? "px-4 py-2 rounded-full text-xs font-semibold hover:bg-white/60"
+                                        : "px-1 py-1 text-sm font-medium hover:text-[#38a169]"
+                                        }`}
                                 >
                                     Portal do Cliente
                                 </button>
                                 <button
                                     onClick={() => scrollToSection("planos")}
-                                    className="px-4 py-2 rounded-full text-xs font-semibold hover:bg-[#1e4a38]/10 transition-all cursor-pointer"
+                                    className={`transition-all duration-300 cursor-pointer ${isScrolled
+                                        ? "px-4 py-2 rounded-full text-xs font-semibold hover:bg-white/60"
+                                        : "px-1 py-1 text-sm font-medium hover:text-[#38a169]"
+                                        }`}
                                 >
                                     Planos
                                 </button>
                                 <button
                                     onClick={() => scrollToSection("faq")}
-                                    className="px-4 py-2 rounded-full text-xs font-semibold hover:bg-[#1e4a38]/10 transition-all cursor-pointer"
+                                    className={`transition-all duration-300 cursor-pointer ${isScrolled
+                                        ? "px-4 py-2 rounded-full text-xs font-semibold hover:bg-white/60"
+                                        : "px-1 py-1 text-sm font-medium hover:text-[#38a169]"
+                                        }`}
                                 >
                                     Dúvidas
                                 </button>
@@ -339,7 +470,7 @@ export default function LandingPage() {
                                 }`}
                         >
                             <Link to="/login">
-                                <button className="text-[#FFFFFF] hover:text-[#38a169] font-medium text-xs transition-colors cursor-pointer flex items-center gap-1.5">
+                                <button className="text-[#1e4a38] hover:text-[#38a169] font-medium text-xs transition-colors cursor-pointer flex items-center gap-1.5">
                                     <LogIn className="w-3.5 h-3.5" />
                                     Entrar
                                 </button>
@@ -353,7 +484,7 @@ export default function LandingPage() {
                         </div>
 
                         {/* Menu Mobile Button */}
-                        <div className={`md:hidden flex items-center gap-2 pointer-events-auto ${isScrolled ? "bg-white/80 backdrop-blur-md p-1.5 rounded-full border border-white/60 shadow-md" : ""}`}>
+                        <div className={`md:hidden flex items-center gap-2 pointer-events-auto ${isScrolled ? "bg-white/40 backdrop-blur-2xl backdrop-saturate-200 p-1.5 rounded-full border border-white/60 shadow-[0_8px_24px_-4px_rgba(30,74,56,0.12),inset_0_1px_1px_0_rgba(255,255,255,0.9)]" : ""}`}>
                             <Link to="/login">
                                 <button className="px-3 py-1.5 text-xs font-medium text-[#1e4a38]">
                                     Entrar
@@ -383,14 +514,21 @@ export default function LandingPage() {
                                 className="text-3xl sm:text-4xl lg:text-[2.75rem] font-medium tracking-tight text-[#1e4a38] leading-[1.18] max-w-xl"
                                 style={{ fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" }}
                             >
-                                Sistema de Gestão Comercial, Estoque e Logística para Lojas e Distribuidoras
+                                Controle sua empresa inteira em uma única plataforma.
                             </h1>
                         </Reveal>
 
                         <Reveal delay={250} direction="up">
-                            <p className="text-base sm:text-lg text-[#2d5c48] font-normal leading-relaxed max-w-lg">
-                                Do PDV ao B.I., estoque multi-filiais e logística de entrega: simplifique e impulsione toda a gestão da sua empresa em uma única plataforma.
-                            </p>
+                            <div className="min-h-[56px] sm:min-h-[64px] flex items-center">
+                                <p
+                                    className={`text-base sm:text-lg text-[#2d5c48] font-normal leading-relaxed max-w-lg transition-all duration-350 ease-out transform ${fadeSubtitle === "in"
+                                        ? "opacity-100 translate-y-0"
+                                        : "opacity-0 -translate-y-2"
+                                        }`}
+                                >
+                                    {HERO_SUBTITLES[subtitleIndex]}
+                                </p>
+                            </div>
                         </Reveal>
 
                         <Reveal delay={400} direction="up">
@@ -421,10 +559,10 @@ export default function LandingPage() {
                         </Reveal>
                     </div>
 
-                    {/* Lado Direito: Ilustração Vetorial do Monitor */}
+                    {/* Lado Direito: Imagem do Mockup do GestApp */}
                     <div className="lg:col-span-6 flex justify-center lg:justify-end">
                         <Reveal delay={200} direction="scale">
-                            <HeroMonitorIllustration />
+                            <img src={gestappMockup} alt="Mockup do GestApp" className="w-full max-w-[600px] h-auto drop-shadow-2xl object-contain" />
                         </Reveal>
                     </div>
                 </div>
@@ -460,78 +598,423 @@ export default function LandingPage() {
             </div>
 
             {/* ================================================================ */}
-            {/* SEÇÃO DOS 4 PILARES DA OPERAÇÃO (DESIGN FLAT & CLEAN) */}
+            {/* SEÇÃO DOS 4 PILARES DA OPERAÇÃO (DESIGN NOVO COM MINI-MOCKUPS) */}
             {/* ================================================================ */}
-            <section id="pilares" className="py-16 md:py-24 bg-white">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <section id="pilares" className="py-20 md:py-28 bg-[#fbfdfb] relative overflow-hidden">
+                {/* Linhas Curvas Decorativas no Fundo */}
+                <div className="absolute top-10 left-1/2 -translate-x-1/2 w-full max-w-5xl h-32 pointer-events-none opacity-20 hidden md:block">
+                    <svg viewBox="0 0 1000 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full">
+                        <path d="M 100 100 Q 500 -40 900 100" stroke="#16a34a" strokeWidth="2" strokeDasharray="6 6" />
+                    </svg>
+                </div>
+
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 relative z-10">
                     <Reveal delay={100} direction="up">
-                        <div className="max-w-3xl mb-14 space-y-3">
-                            <h2 className="text-3xl sm:text-4xl font-bold text-[#1e4a38] tracking-tight">
-                                Os 4 pilares do GestApp na sua empresa
+                        <div className="max-w-3xl mx-auto text-center mb-16 space-y-3">
+                            <h2 className="text-3xl sm:text-5xl font-normal text-[#1e4a38] tracking-tight leading-[1.15]">
+                                Os 4 pilares do GestApp <br className="hidden sm:inline" />
+                                <span className="text-[#38a169] block sm:inline mt-1 sm:mt-0">na sua empresa</span>
                             </h2>
-                            <p className="text-slate-600 text-base sm:text-lg">
+                            <p className="text-slate-500 text-sm sm:text-base font-normal max-w-xl mx-auto pt-1">
                                 Tudo o que sua equipe precisa para operar com clareza, velocidade e lucratividade.
                             </p>
                         </div>
                     </Reveal>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {/* Pilar 1 */}
-                        <Reveal delay={150} direction="up">
-                            <div className="p-7 bg-[#f8fcf9] rounded-2xl border border-[#d6f0de] hover:border-[#48bb78] transition-colors space-y-4 flex flex-col justify-between h-full">
-                                <div className="space-y-4">
-                                    <div className="w-12 h-12 rounded-xl bg-[#e7f6ec] text-[#2f855a] flex items-center justify-center">
-                                        <Store className="w-6 h-6 stroke-[2.2]" />
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 items-stretch">
+                        {/* ================= CARD 01: VENDAS & PDV ================= */}
+                        <Reveal delay={150} direction="up" className="h-full">
+                            <div className="bg-white rounded-[24px] border border-slate-200/80 p-6 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.05)] hover:shadow-xl transition-all duration-300 flex flex-col justify-between h-full group">
+                                <div>
+                                    {/* Topo do Card */}
+                                    <div className="flex items-center justify-between mb-5">
+                                        <div className="w-11 h-11 rounded-full bg-[#e7f6ec] text-[#189851] flex items-center justify-center">
+                                            <ShoppingBag className="w-5 h-5 stroke-[2.2]" />
+                                        </div>
+                                        <span className="w-8 h-8 rounded-full border border-emerald-200/80 bg-emerald-50/50 text-[#189851] font-semibold text-xs flex items-center justify-center">
+                                            01
+                                        </span>
                                     </div>
-                                    <h3 className="text-xl font-bold text-[#1e4a38]">1. Vendas & PDV</h3>
-                                    <p className="text-slate-600 text-sm leading-relaxed">
+
+                                    {/* Título & Descrição */}
+                                    <h3 className="text-xl font-bold text-slate-900 mb-2">Vendas & PDV</h3>
+                                    <p className="text-slate-500 text-xs leading-relaxed mb-5">
                                         Emissão rápida de orçamentos, frente de caixa simplificada, consulta imediata de saldo e múltiplas formas de pagamento.
                                     </p>
+
+                                    {/* Checklist */}
+                                    <ul className="space-y-2.5 mb-6 text-xs font-medium text-slate-700">
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Orçamentos em segundos</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>PDV completo e simplificado</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Múltiplas formas de pagamento</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Integração com boleto e PIX</span>
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                {/* Widget Mockup Inferior */}
+                                <div className="bg-[#f8faf8] rounded-2xl p-4 border border-slate-100 text-[11px] space-y-2.5 mt-auto">
+                                    <div className="font-bold text-slate-800 text-[11px]">Novo pedido</div>
+
+                                    <div className="bg-white rounded-lg p-2 border border-slate-200/60 shadow-2xs">
+                                        <div className="text-[9px] text-slate-400 font-medium">Cliente</div>
+                                        <div className="flex justify-between items-center text-slate-700 font-medium text-[10px]">
+                                            <span>João da Silva</span>
+                                            <ChevronDown className="w-3 h-3 text-slate-400" />
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1.5 pt-1">
+                                        <div className="text-[9px] text-slate-400 font-medium uppercase tracking-wider">Produtos</div>
+                                        <div className="flex justify-between text-[10px] text-slate-700 bg-white p-1.5 rounded border border-slate-100">
+                                            <span className="truncate pr-1">Sofá Retrátil 3 Lugares</span>
+                                            <span className="text-slate-400 shrink-0 mr-1">qnt 1</span>
+                                            <span className="font-semibold shrink-0">R$ 2.699,00</span>
+                                        </div>
+                                        <div className="flex justify-between text-[10px] text-slate-700 bg-white p-1.5 rounded border border-slate-100">
+                                            <span className="truncate pr-1">Mesa de Centro</span>
+                                            <span className="text-slate-400 shrink-0 mr-1">qnt 1</span>
+                                            <span className="font-semibold shrink-0">R$ 299,00</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="pt-2 border-t border-slate-200/60 space-y-1 text-[10px]">
+                                        <div className="text-[9px] text-slate-400 font-medium uppercase tracking-wider">Resumo do pedido</div>
+                                        <div className="flex justify-between text-slate-500">
+                                            <span>Subtotal</span>
+                                            <span>R$ 2.998,00</span>
+                                        </div>
+                                        <div className="flex justify-between text-slate-500">
+                                            <span>Desconto</span>
+                                            <span>R$ 100,00</span>
+                                        </div>
+                                        <div className="flex justify-between font-bold text-slate-800 pt-1 text-[11px]">
+                                            <span>Total</span>
+                                            <span className="text-[#189851]">R$ 2.898,00</span>
+                                        </div>
+                                    </div>
+
+                                    {/* Botões de pagamento */}
+                                    <div className="grid grid-cols-4 gap-1 pt-1">
+                                        <div className="bg-white border border-slate-200 rounded py-1 text-center text-[9px] text-slate-600 font-medium">Dinheiro</div>
+                                        <div className="bg-white border border-slate-200 rounded py-1 text-center text-[9px] text-slate-600 font-medium">Cartão</div>
+                                        <div className="bg-[#189851] text-white rounded py-1 text-center text-[9px] font-bold shadow-2xs">PIX</div>
+                                        <div className="bg-white border border-slate-200 rounded py-1 text-center text-[9px] text-slate-600 font-medium">Boleto</div>
+                                    </div>
                                 </div>
                             </div>
                         </Reveal>
 
-                        {/* Pilar 2 */}
-                        <Reveal delay={250} direction="up">
-                            <div className="p-7 bg-[#f8fcf9] rounded-2xl border border-[#d6f0de] hover:border-[#48bb78] transition-colors space-y-4 flex flex-col justify-between h-full">
-                                <div className="space-y-4">
-                                    <div className="w-12 h-12 rounded-xl bg-[#e7f6ec] text-[#2f855a] flex items-center justify-center">
-                                        <Boxes className="w-6 h-6 stroke-[2.2]" />
+                        {/* ================= CARD 02: ESTOQUE MULTI-FILIAL ================= */}
+                        <Reveal delay={250} direction="up" className="h-full">
+                            <div className="bg-white rounded-[24px] border border-slate-200/80 p-6 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.05)] hover:shadow-xl transition-all duration-300 flex flex-col justify-between h-full group">
+                                <div>
+                                    {/* Topo do Card */}
+                                    <div className="flex items-center justify-between mb-5">
+                                        <div className="w-11 h-11 rounded-full bg-[#e7f6ec] text-[#189851] flex items-center justify-center">
+                                            <Boxes className="w-5 h-5 stroke-[2.2]" />
+                                        </div>
+                                        <span className="w-8 h-8 rounded-full border border-emerald-200/80 bg-emerald-50/50 text-[#189851] font-semibold text-xs flex items-center justify-center">
+                                            02
+                                        </span>
                                     </div>
-                                    <h3 className="text-xl font-bold text-[#1e4a38]">2. Estoque Multi-Filial</h3>
-                                    <p className="text-slate-600 text-sm leading-relaxed">
-                                        Saldo unificado entre lojas e depósitos centrais, transferências com conferência de recebimento e travas anti-furo.
+
+                                    {/* Título & Descrição */}
+                                    <h3 className="text-xl font-bold text-slate-900 mb-2">Estoque Multi-Filial</h3>
+                                    <p className="text-slate-500 text-xs leading-relaxed mb-5">
+                                        Saldo unificado entre lojas e depósitos centrais, transferências com conferência de recebimento e travas anti-furto.
                                     </p>
+
+                                    {/* Checklist */}
+                                    <ul className="space-y-2.5 mb-6 text-xs font-medium text-slate-700">
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Controle de estoque em tempo real</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Transferências entre filiais</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Conferência de recebimento</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Relatórios de giro e ruptura</span>
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                {/* Widget Mockup Inferior */}
+                                <div className="bg-[#f8faf8] rounded-2xl p-4 border border-slate-100 text-[11px] space-y-3 mt-auto">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-slate-800 text-[11px]">Resumo do estoque</span>
+                                        <span className="text-[9px] text-slate-400 border border-slate-200 bg-white px-1.5 py-0.5 rounded flex items-center gap-0.5">
+                                            Todas as filiais <ChevronDown className="w-2.5 h-2.5" />
+                                        </span>
+                                    </div>
+
+                                    {/* Grid de Métricas */}
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                        <div className="bg-white rounded-lg p-2 border border-slate-100 text-center shadow-2xs">
+                                            <div className="text-emerald-600 font-extrabold text-sm">1.248</div>
+                                            <div className="text-[8px] text-slate-400 leading-tight mt-0.5">Produtos em estoque</div>
+                                        </div>
+                                        <div className="bg-white rounded-lg p-2 border border-slate-100 text-center shadow-2xs">
+                                            <div className="text-amber-500 font-extrabold text-sm">210</div>
+                                            <div className="text-[8px] text-slate-400 leading-tight mt-0.5">Estoque baixo</div>
+                                        </div>
+                                        <div className="bg-white rounded-lg p-2 border border-slate-100 text-center shadow-2xs">
+                                            <div className="text-rose-500 font-extrabold text-sm">68</div>
+                                            <div className="text-[8px] text-slate-400 leading-tight mt-0.5">Estoque crítico</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Transferências Recentes */}
+                                    <div className="pt-2 border-t border-slate-200/60 space-y-2">
+                                        <div className="flex justify-between items-center text-[10px]">
+                                            <span className="font-bold text-slate-700">Transferências recentes</span>
+                                            <span className="text-[9px] text-[#189851] font-semibold">Ver todas</span>
+                                        </div>
+
+                                        <div className="space-y-1.5 text-[9px]">
+                                            <div className="bg-white p-2 rounded border border-slate-100 flex items-center justify-between">
+                                                <div>
+                                                    <div className="font-medium text-slate-700">Filial Centro → Depósito Central</div>
+                                                    <div className="text-[8px] text-slate-400">15/05/2025</div>
+                                                </div>
+                                                <span className="bg-emerald-50 text-emerald-600 border border-emerald-200/60 px-1.5 py-0.5 rounded font-semibold text-[8px]">Concluída</span>
+                                            </div>
+
+                                            <div className="bg-white p-2 rounded border border-slate-100 flex items-center justify-between">
+                                                <div>
+                                                    <div className="font-medium text-slate-700">Depósito Central → Filial Norte</div>
+                                                    <div className="text-[8px] text-slate-400">14/05/2025</div>
+                                                </div>
+                                                <span className="bg-emerald-50 text-emerald-600 border border-emerald-200/60 px-1.5 py-0.5 rounded font-semibold text-[8px]">Concluída</span>
+                                            </div>
+
+                                            <div className="bg-white p-2 rounded border border-slate-100 flex items-center justify-between">
+                                                <div>
+                                                    <div className="font-medium text-slate-700">Filial Sul → Filial Centro</div>
+                                                    <div className="text-[8px] text-slate-400">13/05/2025</div>
+                                                </div>
+                                                <span className="bg-amber-50 text-amber-600 border border-amber-200/60 px-1.5 py-0.5 rounded font-semibold text-[8px]">Em trânsito</span>
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </Reveal>
 
-                        {/* Pilar 3 */}
-                        <Reveal delay={350} direction="up">
-                            <div className="p-7 bg-[#f8fcf9] rounded-2xl border border-[#d6f0de] hover:border-[#48bb78] transition-colors space-y-4 flex flex-col justify-between h-full">
-                                <div className="space-y-4">
-                                    <div className="w-12 h-12 rounded-xl bg-[#e7f6ec] text-[#2f855a] flex items-center justify-center">
-                                        <Truck className="w-6 h-6 stroke-[2.2]" />
+                        {/* ================= CARD 03: LOGÍSTICA & ROTAS ================= */}
+                        <Reveal delay={350} direction="up" className="h-full">
+                            <div className="bg-white rounded-[24px] border border-slate-200/80 p-6 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.05)] hover:shadow-xl transition-all duration-300 flex flex-col justify-between h-full group">
+                                <div>
+                                    {/* Topo do Card */}
+                                    <div className="flex items-center justify-between mb-5">
+                                        <div className="w-11 h-11 rounded-full bg-[#e7f6ec] text-[#189851] flex items-center justify-center">
+                                            <Truck className="w-5 h-5 stroke-[2.2]" />
+                                        </div>
+                                        <span className="w-8 h-8 rounded-full border border-emerald-200/80 bg-emerald-50/50 text-[#189851] font-semibold text-xs flex items-center justify-center">
+                                            03
+                                        </span>
                                     </div>
-                                    <h3 className="text-xl font-bold text-[#1e4a38]">3. Logística & Rotas</h3>
-                                    <p className="text-slate-600 text-sm leading-relaxed">
+
+                                    {/* Título & Descrição */}
+                                    <h3 className="text-xl font-bold text-slate-900 mb-2">Logística & Rotas</h3>
+                                    <p className="text-slate-500 text-xs leading-relaxed mb-5">
                                         Roteirização inteligente de caminhões, link de rastreamento com mapa em tempo real para o cliente e ordens para montadores.
                                     </p>
+
+                                    {/* Checklist */}
+                                    <ul className="space-y-2.5 mb-6 text-xs font-medium text-slate-700">
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Otimização de rotas</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Rastreamento em tempo real</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Ordens de entrega e montagem</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Comunicação com motoristas</span>
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                {/* Widget Mockup Inferior */}
+                                <div className="bg-[#f8faf8] rounded-2xl p-4 border border-slate-100 text-[11px] space-y-3 mt-auto">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-slate-800 text-[11px]">Entregas de hoje</span>
+                                        <span className="text-[9px] text-[#189851] font-semibold cursor-pointer">Ver mapa</span>
+                                    </div>
+
+                                    {/* Item 1 de entrega com Mini Mapa */}
+                                    <div className="bg-white p-2.5 rounded-xl border border-slate-100 space-y-2 shadow-2xs">
+                                        <div className="flex justify-between items-center text-[9px]">
+                                            <span className="text-slate-400 font-medium">08:00 - 12:00</span>
+                                            <span className="bg-emerald-50 text-emerald-600 border border-emerald-200/60 px-1.5 py-0.5 rounded font-semibold text-[8px]">Em andamento</span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="space-y-0.5 text-[9px]">
+                                                <div className="font-bold text-slate-800">João da Silva</div>
+                                                <div className="text-slate-500 text-[8px]">Rua das Flores, 123 - Centro</div>
+                                                <div className="text-slate-400 text-[8px]">Pedido: #5281</div>
+                                            </div>
+                                            {/* Representação visual do mapa */}
+                                            <div className="w-14 h-12 rounded bg-emerald-50 border border-emerald-100 relative overflow-hidden shrink-0 flex items-center justify-center">
+                                                <div className="absolute inset-0 opacity-40 bg-[radial-gradient(#189851_1px,transparent_1px)] [background-size:6px_6px]" />
+                                                <div className="w-full h-0.5 bg-emerald-400 rotate-12 relative z-10" />
+                                                <div className="w-4 h-4 rounded-full bg-[#189851] text-white flex items-center justify-center relative z-20 shadow-xs">
+                                                    <Truck className="w-2.5 h-2.5" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Item 2 de entrega */}
+                                    <div className="bg-white p-2.5 rounded-xl border border-slate-100 space-y-2 shadow-2xs">
+                                        <div className="flex justify-between items-center text-[9px]">
+                                            <span className="text-slate-400 font-medium">14:00 - 18:00</span>
+                                            <span className="bg-amber-50 text-amber-600 border border-amber-200/60 px-1.5 py-0.5 rounded font-semibold text-[8px]">Pendente</span>
+                                        </div>
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="space-y-0.5 text-[9px]">
+                                                <div className="font-bold text-slate-800">Maria Aparecida</div>
+                                                <div className="text-slate-500 text-[8px]">Av. Brasil, 456 - B. São Geraldo</div>
+                                                <div className="text-slate-400 text-[8px]">Pedido: #5278</div>
+                                            </div>
+                                            {/* Map visual */}
+                                            <div className="w-14 h-12 rounded bg-slate-50 border border-slate-200 relative overflow-hidden shrink-0 flex items-center justify-center">
+                                                <div className="w-full h-0.5 bg-amber-300 -rotate-12 relative z-10" />
+                                                <div className="w-2 h-2 rounded-full bg-amber-500 relative z-20" />
+                                            </div>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </Reveal>
 
-                        {/* Pilar 4 */}
-                        <Reveal delay={450} direction="up">
-                            <div className="p-7 bg-[#f8fcf9] rounded-2xl border border-[#d6f0de] hover:border-[#48bb78] transition-colors space-y-4 flex flex-col justify-between h-full">
-                                <div className="space-y-4">
-                                    <div className="w-12 h-12 rounded-xl bg-[#e7f6ec] text-[#2f855a] flex items-center justify-center">
-                                        <Headphones className="w-6 h-6 stroke-[2.2]" />
+                        {/* ================= CARD 04: PÓS-VENDA & SUPORTE ================= */}
+                        <Reveal delay={450} direction="up" className="h-full">
+                            <div className="bg-white rounded-[24px] border border-slate-200/80 p-6 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.05)] hover:shadow-xl transition-all duration-300 flex flex-col justify-between h-full group">
+                                <div>
+                                    {/* Topo do Card */}
+                                    <div className="flex items-center justify-between mb-5">
+                                        <div className="w-11 h-11 rounded-full bg-[#e7f6ec] text-[#189851] flex items-center justify-center">
+                                            <Headphones className="w-5 h-5 stroke-[2.2]" />
+                                        </div>
+                                        <span className="w-8 h-8 rounded-full border border-emerald-200/80 bg-emerald-50/50 text-[#189851] font-semibold text-xs flex items-center justify-center">
+                                            04
+                                        </span>
                                     </div>
-                                    <h3 className="text-xl font-bold text-[#1e4a38]">4. Pós-Venda & Suporte para seu cliente</h3>
-                                    <p className="text-slate-600 text-sm leading-relaxed">
+
+                                    {/* Título & Descrição */}
+                                    <h3 className="text-xl font-bold text-slate-900 mb-2">Pós-Venda & Suporte para seu cliente</h3>
+                                    <p className="text-slate-500 text-xs leading-relaxed mb-5">
                                         Autoatendimento para solicitações de garantia via QR Code impresso diretamente na nota do pedido, reduzindo chamados repetitivos.
                                     </p>
+
+                                    {/* Checklist */}
+                                    <ul className="space-y-2.5 mb-6 text-xs font-medium text-slate-700">
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Portal do cliente 24h</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Abertura de garantia via QR Code</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Acompanhamento do pedido</span>
+                                        </li>
+                                        <li className="flex items-center gap-2">
+                                            <CheckCircle2 className="w-4 h-4 text-[#189851] shrink-0" />
+                                            <span>Menos chamados, mais satisfação</span>
+                                        </li>
+                                    </ul>
+                                </div>
+
+                                {/* Widget Mockup Inferior */}
+                                <div className="bg-[#f8faf8] rounded-2xl p-4 border border-slate-100 text-[11px] space-y-2.5 mt-auto">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-bold text-slate-800 text-[11px]">Portal do Cliente</span>
+                                        <span className="text-[9px] text-[#189851] font-semibold cursor-pointer">Ver portal</span>
+                                    </div>
+
+                                    {/* Opções do Portal */}
+                                    <div className="space-y-1.5 text-[9px]">
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 flex items-center justify-between hover:border-emerald-200 transition-colors cursor-pointer">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-6 h-6 rounded bg-emerald-50 text-[#189851] flex items-center justify-center shrink-0">
+                                                    <Truck className="w-3 h-3" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-slate-700">Acompanhar pedido</div>
+                                                    <div className="text-[8px] text-slate-400">Veja o status do seu pedido em tempo real</div>
+                                                </div>
+                                            </div>
+                                            <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />
+                                        </div>
+
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 flex items-center justify-between hover:border-emerald-200 transition-colors cursor-pointer">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-6 h-6 rounded bg-emerald-50 text-[#189851] flex items-center justify-center shrink-0">
+                                                    <ShieldCheck className="w-3 h-3" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-slate-700">Garantias e solicitações</div>
+                                                    <div className="text-[8px] text-slate-400">Abra ou acompanhe uma garantia</div>
+                                                </div>
+                                            </div>
+                                            <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />
+                                        </div>
+
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 flex items-center justify-between hover:border-emerald-200 transition-colors cursor-pointer">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-6 h-6 rounded bg-emerald-50 text-[#189851] flex items-center justify-center shrink-0">
+                                                    <FileText className="w-3 h-3" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-slate-700">Notas e documentos</div>
+                                                    <div className="text-[8px] text-slate-400">Acesse notas fiscais e documentos</div>
+                                                </div>
+                                            </div>
+                                            <ChevronRight className="w-3 h-3 text-slate-300 shrink-0" />
+                                        </div>
+
+                                        <div className="bg-white p-2 rounded-lg border border-slate-100 flex items-center justify-between hover:border-emerald-200 transition-colors cursor-pointer">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-6 h-6 rounded bg-emerald-50 text-[#189851] flex items-center justify-center shrink-0">
+                                                    <MessageCircle className="w-3 h-3" />
+                                                </div>
+                                                <div>
+                                                    <div className="font-bold text-slate-700">Fale com a loja</div>
+                                                    <div className="text-[8px] text-slate-400">Inicie uma conversa com nossa equipe</div>
+                                                </div>
+                                            </div>
+                                            <ChevronRight className="w-3 h-3 text-slate-[#189851] shrink-0" />
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                         </Reveal>
@@ -574,8 +1057,7 @@ export default function LandingPage() {
                                         <div className="w-3 h-3 rounded-full bg-amber-500/80" />
                                         <div className="w-3 h-3 rounded-full bg-emerald-500/80" />                        </div>
                                     <div className="px-4 py-1 rounded-full bg-white border border-slate-200 text-[11px] text-slate-400 font-mono shadow-2xs">
-                                        cliente.suaempresa.com.br
-                                    </div>
+                                        cliente.<b className="text-slate-800">suaempresa</b>.com.br                                    </div>
                                     <div className="w-12" />
                                 </div>
 
@@ -640,58 +1122,8 @@ export default function LandingPage() {
 
                 </div>
             </section>
-            {/* SEÇÃO PROVA SOCIAL - ESTILO SAAS MINIMALISTA */}
-            <section className="py-16 bg-white">
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                    <Reveal delay={100} direction="up">
-                        <div className="rounded-[2.5rem] bg-[#1e4a38] text-white p-8 sm:p-14 space-y-10 shadow-2xl overflow-hidden">
-
-                            {/* Cabeçalho Superior: Título + Botão/Ação */}
-                            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
-                                <div className="max-w-2xl space-y-3">
-                                    <h2 className="text-3xl sm:text-5xl font-normal tracking-tight leading-[1.15] text-white">
-                                        Desenvolvido e validado junto com a Móveis Pedro II.
-                                    </h2>
-                                    <p className="text-emerald-100/70 text-sm sm:text-base font-normal max-w-xl leading-relaxed">
-                                        O <b className="text-white">GestApp</b> foi construído no chão de loja de uma das maiores referências do setor, na região serrana do Rio de Janeiro. Unimos tecnologia a mais de 25 anos de pioneirismo e experiência real em vendas, estoque e logística.
-                                    </p>
-                                </div>
-                            </div>
-
-                            {/* Card Interno Grande (Mídia / Imagem de Destaque) */}
-                            <div className="relative w-full rounded-3xl bg-[#FFFFFF] border border-white/10 overflow-hidden flex items-center justify-center min-h-[320px] sm:min-h-[420px] p-8">
-                                {/* Imagem da Logo com fundo verde escuro nativo */}
-                                <img
-                                    src="https://webra.com.br/wp-content/uploads/2022/09/Webra_Site_MoveisPedroII_01.jpg"
-                                    alt="Móveis Pedro II"
-                                    className="max-h-48 sm:max-h-64 w-auto object-contain opacity-90 transition-opacity hover:opacity-100 duration-300"
-                                />
-                            </div>
-
-                            {/* Rodapé de Métricas Minimalistas */}
-                            <div className="pt-6 border-t border-white/10 grid grid-cols-2 md:grid-cols-4 gap-6 text-left">
-                                <div>
-                                    <p className="text-xs text-emerald-200/60 font-medium">Validação de Mercado</p>
-                                    <p className="text-2xl sm:text-3xl font-light text-white mt-1">100% Prático</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-emerald-200/60 font-medium">Expertise Comercial</p>
-                                    <p className="text-2xl sm:text-3xl font-light text-white mt-1">+25 Anos</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-emerald-200/60 font-medium">Arquitetura de Dados</p>
-                                    <p className="text-2xl sm:text-3xl font-light text-white mt-1">Multi-Filial</p>
-                                </div>
-                                <div>
-                                    <p className="text-xs text-emerald-200/60 font-medium">Disponibilidade</p>
-                                    <p className="text-2xl sm:text-3xl font-light text-white mt-1">Nuvem 24/7</p>
-                                </div>
-                            </div>
-
-                        </div>
-                    </Reveal>
-                </div>
-            </section>
+            {/* SEÇÃO PROVA SOCIAL COM ANIMAÇÃO DE EXPANSÃO / ESTICAMENTO DINÂMICO NO SCROLL */}
+            <ExpandingSocialProofSection />
             {/* ================================================================ */}
             {/* SEÇÃO DE PLANOS ATIVOS (DESIGN CLEAN) */}
             {/* ================================================================ */}

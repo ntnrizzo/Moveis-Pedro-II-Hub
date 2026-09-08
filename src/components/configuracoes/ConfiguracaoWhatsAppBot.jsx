@@ -25,8 +25,7 @@ import QRCode from "qrcode";
 import { ZAP_API_URL as WHATSAPP_BOT_URL } from "@/utils/zapApiUrl";
 
 // 🔐 Chave de API para autenticação com o backend do bot
-const BOT_API_KEY = import.meta.env.VITE_BOT_API_SECRET || '';
-const botAuthHeaders = BOT_API_KEY ? { 'x-bot-api-key': BOT_API_KEY } : {};
+import { getBotAuthHeaders } from '@/utils/botAuth';
 import { getOfflineQueue, removeOfflineQueueItem, clearOfflineQueue } from "@/utils/offlineQueue";
 import { whatsappService } from "@/services/whatsappService";
 import { useTenant } from "@/contexts/TenantContext";
@@ -359,9 +358,9 @@ export default function ConfiguracaoWhatsAppBot() {
     const { brandName, organization } = useTenant();
     const currentOrgId = organization?.id || '00000000-0000-0000-0000-000000000001';
 
-    const getBotHeaders = useCallback((extra = {}) => ({
+    const getBotHeaders = useCallback(async (extra = {}) => ({
         ...extra,
-        ...(BOT_API_KEY ? { 'x-bot-api-key': BOT_API_KEY } : {}),
+        ...await getBotAuthHeaders(),
         'x-organization-id': currentOrgId,
     }), [currentOrgId]);
 
@@ -452,7 +451,7 @@ export default function ConfiguracaoWhatsAppBot() {
     const fetchStatus = useCallback(async () => {
         try {
             const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/status`, {
-                headers: getBotHeaders(),
+                headers: await getBotHeaders(),
             });
             if (res.ok) {
                 const data = await res.json();
@@ -500,7 +499,7 @@ export default function ConfiguracaoWhatsAppBot() {
         const templates = getMessageTemplates(brandName || "Nossa Empresa");
         try {
             const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/ai-settings`, {
-                headers: getBotHeaders(),
+                headers: await getBotHeaders(),
             });
             if (res.ok) {
                 const data = await res.json();
@@ -568,7 +567,7 @@ export default function ConfiguracaoWhatsAppBot() {
 
             const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/ai-settings`, {
                 method: 'POST',
-                headers: getBotHeaders({ 'Content-Type': 'application/json' }),
+                headers: await getBotHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(payload)
             });
 
@@ -586,7 +585,7 @@ export default function ConfiguracaoWhatsAppBot() {
     const handleReconnect = async () => {
         setReconnecting(true);
         try {
-            const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/reconnect`, { method: 'POST', headers: getBotHeaders() });
+            const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/reconnect`, { method: 'POST', headers: await getBotHeaders() });
             if (res.ok) {
                 toast.success("Reconexão iniciada!");
                 setTimeout(fetchStatus, 1000);
@@ -601,7 +600,7 @@ export default function ConfiguracaoWhatsAppBot() {
     const handleDisconnect = async () => {
         setDisconnecting(true);
         try {
-            const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/disconnect`, { method: 'POST', headers: getBotHeaders() });
+            const res = await fetch(`${WHATSAPP_BOT_URL}/whatsapp/disconnect`, { method: 'POST', headers: await getBotHeaders() });
             if (res.ok) {
                 toast.success("Desconectado!");
                 setTimeout(fetchStatus, 1000);
@@ -1152,7 +1151,3 @@ export default function ConfiguracaoWhatsAppBot() {
         </div>
     );
 }
-
-// Nota para o futuro:
-// Para centralizar totalmente as chaves, o backend (server.js) deve ser atualizado para ler
-// a gemini_api_key diretamente da tabela 'configuracao_sistema' do Supabase se não for enviada aqui.

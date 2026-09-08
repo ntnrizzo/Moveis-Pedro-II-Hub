@@ -1,3 +1,4 @@
+import { getAuthContext, requireAdmin, requireOrganization, deny } from "../_shared/authContext.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 
@@ -77,10 +78,13 @@ serve(async (req) => {
       )
     }
 
-    const orgId = profile.organization_id;
+    const ctx = await getAuthContext(req);
+    const orgId = ctx.organizationId;
 
     // Parse request body
     const { planoId, paymentMethod, cardDetails, billingInfo, action = 'create' } = await req.json().catch(() => ({}));
+
+    requireAdmin(ctx); // Creating/updating can also cancel the previous subscription.
 
     // Action: Cancel Subscription
     if (action === 'cancel') {
@@ -113,7 +117,6 @@ serve(async (req) => {
 
       if (!asaasResponse.ok) {
         const errText = await asaasResponse.text();
-        console.error('Asaas delete subscription error:', errText);
         return new Response(
           JSON.stringify({ error: `Asaas error: ${errText}` }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -349,7 +352,6 @@ serve(async (req) => {
 
       if (!createCustomerRes.ok) {
         const errText = await createCustomerRes.text();
-        console.error('Asaas customer creation failed:', errText);
         return new Response(
           JSON.stringify({ error: `Asaas customer creation failed: ${errText}` }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -393,7 +395,6 @@ serve(async (req) => {
 
         if (!createPayRes.ok) {
           const errText = await createPayRes.text();
-          console.error('Asaas payment creation failed:', errText);
           return new Response(
             JSON.stringify({ error: `Asaas PIX creation failed: ${errText}` }),
             { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -457,7 +458,6 @@ serve(async (req) => {
 
         if (!createSubRes.ok) {
           const errText = await createSubRes.text();
-          console.error('Asaas subscription creation failed:', errText);
           return new Response(
             JSON.stringify({ error: `Asaas subscription creation failed: ${errText}` }),
             { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -601,7 +601,6 @@ serve(async (req) => {
 
            if (!updateSubRes.ok) {
              const errText = await updateSubRes.text();
-             console.error('Asaas subscription update failed:', errText);
              return new Response(
                JSON.stringify({ error: `Asaas subscription update failed: ${errText}` }),
                { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -704,6 +703,7 @@ serve(async (req) => {
     )
 
   } catch (error) {
+        if (error instanceof Response) return error;
     console.error('Error in Edge Function:', error);
     return new Response(
       JSON.stringify({ error: error.message }),

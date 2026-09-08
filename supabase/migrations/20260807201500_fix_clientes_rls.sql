@@ -27,8 +27,7 @@ FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- Permitir leitura anônima para busca/identificação no portal antes do login
 DROP POLICY IF EXISTS select_clientes_anon ON public.clientes;
-CREATE POLICY select_clientes_anon ON public.clientes
-FOR SELECT TO anon USING (true);
+-- Acesso anônimo removido: identificação pública não pode expor clientes.
 
 -- Atualizar a função _rebuild_all_isolated_policies para remover 'clientes'
 -- da lista de tabelas internas restritas por organização de funcionário

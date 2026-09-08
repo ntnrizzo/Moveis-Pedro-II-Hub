@@ -17,6 +17,7 @@ import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { calculateSuggestedMarkup, calculateMarkupDetails, calculateFinalPriceFromMarkup, toMultiplierFromPercent, toPercentFromMultiplier } from "@/utils/markupCalculator";
 import { useAuth } from '@/hooks/useAuth';
+import { isValidGTIN, normalizeGTIN, normalizeSKU, generateSafeSKU } from "@/utils/gtinValidator";
 const categorias = [
   "Sofa",
   "Cama",
@@ -47,6 +48,7 @@ export default function ProdutoModal({ isOpen, onClose, onSave, produto, isLoadi
   const isVendedor = String(user?.cargo || '').toLowerCase().includes('vendedor');
   const showFinancials = user?.cargo === 'Administrador';
   const [formData, setFormData] = useState({
+    sku: "",
     codigo_barras: "",
     nome: "",
     categoria: "",
@@ -108,6 +110,7 @@ export default function ProdutoModal({ isOpen, onClose, onSave, produto, isLoadi
   useEffect(() => {
     if (produto) {
       setFormData({
+        sku: produto.sku || "",
         codigo_barras: produto.codigo_barras || "",
         nome: produto.nome || "",
         categoria: produto.categoria || "",
@@ -127,6 +130,7 @@ export default function ProdutoModal({ isOpen, onClose, onSave, produto, isLoadi
       });
     } else {
       setFormData({
+        sku: "",
         codigo_barras: "",
         nome: "",
         categoria: "",
@@ -189,6 +193,16 @@ export default function ProdutoModal({ isOpen, onClose, onSave, produto, isLoadi
       newErrors.cfop = "CFOP inválido (mínimo 4 dígitos)";
     }
 
+    if (produto && !formData.sku?.trim()) {
+      newErrors.sku = "SKU é obrigatório para produtos cadastrados";
+    }
+
+    if (formData.codigo_barras && formData.codigo_barras.trim()) {
+      if (!isValidGTIN(formData.codigo_barras)) {
+        newErrors.codigo_barras = "Código de barras inválido. Deve ser um GTIN válido (8, 12, 13 ou 14 dígitos com checksum)";
+      }
+    }
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -200,8 +214,17 @@ export default function ProdutoModal({ isOpen, onClose, onSave, produto, isLoadi
       return;
     }
 
+    const skuFinal = (formData.sku && formData.sku.trim())
+      ? normalizeSKU(formData.sku)
+      : (produto?.sku || generateSafeSKU('PRD'));
+    const gtinFinal = (formData.codigo_barras && formData.codigo_barras.trim())
+      ? normalizeGTIN(formData.codigo_barras, true)
+      : null;
+
     const dataToSave = {
       ...formData,
+      sku: skuFinal,
+      codigo_barras: gtinFinal,
       nome: (isVendedor && !!produto) ? produto.nome : formData.nome,
       preco_venda: parseFloat(formData.preco_final_manual || formData.preco_venda),
       preco_custo: formData.preco_custo ? parseFloat(formData.preco_custo) : undefined,
@@ -238,16 +261,31 @@ export default function ProdutoModal({ isOpen, onClose, onSave, produto, isLoadi
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* SKU */}
+          <div>
+            <Label htmlFor="sku">SKU / Código Interno *</Label>
+            <Input
+              id="sku"
+              value={formData.sku}
+              onChange={(e) => handleChange("sku", e.target.value)}
+              placeholder={produto ? "Ex: SOF-RET-3L" : "Gerado automaticamente se vazio"}
+              className={errors.sku ? "border-red-500 font-mono" : "font-mono"}
+            />
+            {errors.sku && <p className="text-xs text-red-500 mt-1">{errors.sku}</p>}
+          </div>
+
           {/* Codigo de Barras */}
           <div>
-            <Label htmlFor="codigo_barras">Codigo de Barras</Label>
+            <Label htmlFor="codigo_barras">Código de Barras (EAN / GTIN)</Label>
             <Input
               id="codigo_barras"
               value={formData.codigo_barras}
               onChange={(e) => handleChange("codigo_barras", e.target.value.replace(/\D/g, ''))}
-              placeholder="Opcional"
-              maxLength={13}
+              placeholder="Opcional (GTIN-8, 12, 13 ou 14 dígitos)"
+              maxLength={14}
+              className={errors.codigo_barras ? "border-red-500 font-mono" : "font-mono"}
             />
+            {errors.codigo_barras && <p className="text-xs text-red-500 mt-1">{errors.codigo_barras}</p>}
           </div>
 
           {/* Nome */}

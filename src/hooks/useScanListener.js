@@ -3,6 +3,9 @@ import { useEffect, useState, useRef } from 'react';
 export function useScanListener(onScan) {
     const [buffer, setBuffer] = useState('');
     const timeoutRef = useRef(null);
+    const bufferRef = useRef('');
+    const onScanRef = useRef(onScan);
+    onScanRef.current = onScan;
 
     useEffect(() => {
         const handleKeyDown = (e) => {
@@ -13,25 +16,28 @@ export function useScanListener(onScan) {
             if (e.key.length > 1 && e.key !== 'Enter') return;
 
             if (e.key === 'Enter') {
-                if (buffer.length > 0) {
+                if (bufferRef.current.length > 0) {
                     // Clean sanitation: remove anything that is not a number
-                    const scannedCode = buffer.replace(/[^0-9]/g, '');
+                    const scannedCode = bufferRef.current.replace(/[^0-9]/g, '');
                     if (scannedCode) {
-                        onScan(scannedCode);
+                        onScanRef.current(scannedCode);
                     }
+                    bufferRef.current = '';
                     setBuffer('');
                 }
                 return;
             }
 
-            setBuffer(prev => prev + e.key);
+            bufferRef.current += e.key;
+            setBuffer(bufferRef.current);
 
             // Reset buffer if typing is too slow (manual entry vs scanner)
             // Scanners are usually very fast (<50ms between chars)
             // But we just use a simple timeout to clear stale buffers
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             timeoutRef.current = setTimeout(() => {
-                setBuffer('');
+                bufferRef.current = '';
+                    setBuffer('');
             }, 300); // 300ms idle clears buffer
         };
 
@@ -41,7 +47,7 @@ export function useScanListener(onScan) {
             window.removeEventListener('keydown', handleKeyDown);
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
         };
-    }, [buffer, onScan]);
+    }, []);
 
     return buffer;
 }

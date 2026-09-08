@@ -122,11 +122,6 @@ export default function Entregador() {
     const [observacaoAssistencia, setObservacaoAssistencia] = useState("");
 
     // Estado para modal de link de pagamento
-    const [modalLinkPagamento, setModalLinkPagamento] = useState(null);
-    const [linkPagamentoData, setLinkPagamentoData] = useState(null);
-    const [gerandoLink, setGerandoLink] = useState(false);
-    const [linkCopiado, setLinkCopiado] = useState(false);
-    const [numeroAlternativo, setNumeroAlternativo] = useState("");
 
     // Estado para modal de confirmação de pagamento simplificado
     const [modalConfirmaPagamento, setModalConfirmaPagamento] = useState(null);
@@ -1373,90 +1368,11 @@ export default function Entregador() {
         return data.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit' });
     };
 
-    // Funções de link de pagamento
-    const gerarLinkPagamento = async (entrega) => {
-        setGerandoLink(true);
-        try {
-            // Payload para Stone Payment Link
-            const payload = {
-                venda_id: entrega.venda_id || null,
-                valor: entrega.valor_a_receber || 0,
-                descricao: `Pedido #${entrega.numero_pedido} - ${brandName}`,
-                cliente_nome: entrega.cliente_nome,
-                cliente_email: null,
-                cliente_documento: null,
-                payment_methods: ['pix', 'credit_card', 'boleto'],
-                max_installments: 12,
-                expires_in_days: 1 // Link expira em 1 dia para entrega
-            };
-
-            const { data, error } = await supabase.functions.invoke('stone-payment-link', { body: payload });
-            if (error) throw new Error(error.message);
-            if (data.error) throw new Error(data.error);
-
-            // Normalizar resposta da Stone
-            const normalizedData = {
-                link_pagamento: data.payment_url,
-                qr_code_url: data.qr_code || `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(data.payment_url)}`,
-                valor: entrega.valor_a_receber,
-                entrega
-            };
-
-            setLinkPagamentoData(normalizedData);
-            toast.success("Link de pagamento gerado!");
-        } catch (err) {
-            console.error("Erro ao gerar link:", err);
-            toast.error(err.message || "Erro ao gerar link");
-        } finally {
-            setGerandoLink(false);
-        }
-    };
-
     const itensBloqueadosChecklist = itensChecklist.filter(item => item.bloqueado_montagem).length;
     const itensSelecionaveisChecklist = itensChecklist.filter(item => !item.bloqueado_montagem);
     const conferidosSelecionaveisChecklist = itensSelecionaveisChecklist.filter(item => itensConferidos.has(item.id)).length;
     const podeIniciarChecklist = itensBloqueadosChecklist === 0 && conferidosSelecionaveisChecklist === itensSelecionaveisChecklist.length;
 
-
-    const copiarLink = async () => {
-        if (!linkPagamentoData?.link_pagamento) return;
-        try {
-            await navigator.clipboard.writeText(linkPagamentoData.link_pagamento);
-            setLinkCopiado(true);
-            toast.success("Link copiado!");
-            setTimeout(() => setLinkCopiado(false), 2000);
-        } catch (err) { toast.error("Erro ao copiar"); }
-    };
-
-    const enviarWhatsAppPara = async (numero, entrega = null) => {
-        if (!linkPagamentoData?.link_pagamento || !numero) {
-            toast.error("Número não fornecido");
-            return;
-        }
-        const telefone = numero.replace(/\D/g, '');
-        const telefoneFormatado = telefone.startsWith('55') ? telefone : `55${telefone}`;
-
-        // Salvar telefone alternativo no cliente se diferente
-        if (numeroAlternativo && entrega?.cliente_id) {
-            try {
-                const clienteTelNorm = entrega.cliente_telefone?.replace(/\D/g, '') || '';
-                if (telefone !== clienteTelNorm) {
-                    await base44.entities.Cliente.update(entrega.cliente_id, { telefone_alternativo: telefone });
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        const nome = entrega?.cliente_nome?.split(' ')[0] || 'Cliente';
-        const mensagem = encodeURIComponent(
-            `Olá ${nome}! 👋\n\n` +
-            `Segue o link para pagamento do seu pedido #${entrega?.numero_pedido}:\n\n` +
-            `💰 Valor: R$ ${linkPagamentoData.valor?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n` +
-            `🔗 Link: ${linkPagamentoData.link_pagamento}\n\n` +
-            `Você pode pagar com Pix, Cartão ou Boleto.\n\n` +
-            `- ${brandName}`
-        );
-        window.open(`https://wa.me/${telefoneFormatado}?text=${mensagem}`, '_blank');
-    };
 
     // Verificar se é admin ou tem cargo de entregador
     const isAdmin = user?.cargo === 'Administrador';
@@ -2393,126 +2309,7 @@ export default function Entregador() {
                 </DialogContent>
             </Dialog>
 
-            {/* Modal de Link de Pagamento */}
-            <Dialog open={!!modalLinkPagamento} onOpenChange={(open) => !open && setModalLinkPagamento(null)}>
-                <DialogContent className="max-w-md mx-4">
-                    <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <Link2 className="w-5 h-5 text-blue-600" />
-                            Link de Pagamento
-                        </DialogTitle>
-                    </DialogHeader>
-
-                    {gerandoLink ? (
-                        <div className="flex flex-col items-center justify-center py-8">
-                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mb-4"></div>
-                            <p className="text-gray-500">Gerando link...</p>
-                        </div>
-                    ) : linkPagamentoData ? (
-                        <div className="space-y-4">
-                            {/* Valor e Pedido */}
-                            <div className="bg-blue-50 rounded-lg p-4 text-center">
-                                <p className="text-sm text-blue-600">Pedido #{linkPagamentoData.entrega?.numero_pedido}</p>
-                                <p className="text-2xl font-bold text-blue-800">
-                                    R$ {linkPagamentoData.valor?.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                </p>
-                            </div>
-
-                            {/* QR Code */}
-                            {linkPagamentoData.qr_code_url && (
-                                <div className="flex justify-center">
-                                    <div className="bg-white p-3 rounded-lg border shadow-sm">
-                                        <img
-                                            src={linkPagamentoData.qr_code_url}
-                                            alt="QR Code"
-                                            className="w-40 h-40"
-                                        />
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* Link copiável */}
-                            <div className="flex items-center gap-2 bg-gray-50 rounded-lg p-2 border">
-                                <input
-                                    type="text"
-                                    value={linkPagamentoData.link_pagamento}
-                                    readOnly
-                                    className="flex-1 bg-transparent border-none focus:outline-none text-xs text-gray-500 truncate"
-                                />
-                                <Button size="sm" variant="ghost" onClick={copiarLink} className="shrink-0">
-                                    {linkCopiado ? <CheckCircle className="w-4 h-4 text-green-600" /> : <Copy className="w-4 h-4" />}
-                                </Button>
-                            </div>
-
-                            {/* WhatsApp Options */}
-                            <div className="bg-green-50 rounded-lg p-4 border border-green-200 space-y-3">
-                                <p className="text-sm font-semibold text-green-800 flex items-center gap-1">
-                                    <MessageCircle className="w-4 h-4" /> Enviar via WhatsApp
-                                </p>
-
-                                {isPaidModuleActive('whatsapp') ? (
-                                    <>
-                                        {/* Enviar para cliente cadastrado */}
-                                        {linkPagamentoData.entrega?.cliente_telefone && (
-                                            <Button
-                                                size="sm"
-                                                onClick={() => enviarWhatsAppPara(linkPagamentoData.entrega.cliente_telefone, linkPagamentoData.entrega)}
-                                                className="w-full bg-green-600 hover:bg-green-700 justify-start gap-2"
-                                            >
-                                                <MessageCircle className="w-4 h-4" />
-                                                Enviar para {linkPagamentoData.entrega?.cliente_nome?.split(' ')[0]}
-                                            </Button>
-                                        )}
-
-                                        {/* Enviar para outro número */}
-                                        <div className="flex gap-2">
-                                            <div className="flex-1 relative">
-                                                <Input
-                                                    type="tel"
-                                                    placeholder="Outro número"
-                                                    value={numeroAlternativo}
-                                                    onChange={(e) => setNumeroAlternativo(e.target.value.replace(/\D/g, ''))}
-                                                    className="h-9 text-sm pl-10"
-                                                />
-                                                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs text-gray-400">+55</span>
-                                            </div>
-                                            <Button
-                                                size="sm"
-                                                onClick={() => enviarWhatsAppPara(numeroAlternativo, linkPagamentoData.entrega)}
-                                                disabled={!numeroAlternativo || numeroAlternativo.length < 10}
-                                                className="bg-green-600 hover:bg-green-700"
-                                            >
-                                                <Send className="w-4 h-4" />
-                                            </Button>
-                                        </div>
-                                    </>
-                                ) : (
-                                    <p className="text-xs text-amber-700 bg-amber-50 p-2 rounded border border-amber-200">
-                                        ⚠️ O módulo de WhatsApp está desativado no plano atual da sua organização.
-                                    </p>
-                                )}
-                            </div>
-
-                            {/* Botão Fechar */}
-                            <Button
-                                variant="outline"
-                                className="w-full"
-                                onClick={() => {
-                                    setModalLinkPagamento(null);
-                                    setLinkPagamentoData(null);
-                                    setNumeroAlternativo("");
-                                }}
-                            >
-                                Fechar
-                            </Button>
-                        </div>
-                    ) : (
-                        <div className="text-center py-8 text-gray-500">
-                            Erro ao gerar link. Tente novamente.
-                        </div>
-                    )}
-                </DialogContent>
-            </Dialog>
+            
 
             {/* Modal de Confirmação de Pagamento Simplificado */}
             <Dialog open={!!modalConfirmaPagamento} onOpenChange={fecharModalConfirmacaoPagamento}>

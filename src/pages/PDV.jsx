@@ -21,7 +21,7 @@ import {
 } from "../components/vendas/NotaPedidoPDF";
 import { processarFidelidadeCompra } from "@/utils/fidelidadeEngine";
 import { ZAP_API_URL } from "@/utils/zapApiUrl";
-const _BOT_API_KEY = import.meta.env.VITE_BOT_API_SECRET || '';
+import { getBotAuthHeaders } from '@/utils/botAuth';
 import { whatsappService } from "@/services/whatsappService";
 import ProdutoQuickEditModal from "@/components/produtos/ProdutoQuickEditModal";
 
@@ -47,34 +47,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { RestricaoCheckbox } from "@/components/ui/restricao-checkbox";
 
-// Chaves para persistência
-const PDV_STATE_KEY = 'pdv_state';
-const OFFLINE_SALES_KEY = 'pending_sales_offline';
-
-// --- FUNÇÕES AUXILIARES DE OFFLINE ---
-const saveOfflineSale = (vendaData) => {
-  try {
-    const pending = JSON.parse(localStorage.getItem(OFFLINE_SALES_KEY) || '[]');
-    const vendaOffline = { ...vendaData, offlineId: Date.now(), timestamp: new Date().toISOString() };
-    pending.push(vendaOffline);
-    localStorage.setItem(OFFLINE_SALES_KEY, JSON.stringify(pending));
-    return true;
-  } catch (e) {
-    console.error("Erro ao salvar offline:", e);
-    return false;
-  }
-};
-
-const getOfflineSales = () => {
-  try {
-    return JSON.parse(localStorage.getItem(OFFLINE_SALES_KEY) || '[]');
-  } catch (e) { return []; }
-};
-
-const removeOfflineSale = (offlineId) => {
-  const pending = getOfflineSales().filter(s => s.offlineId !== offlineId);
-  localStorage.setItem(OFFLINE_SALES_KEY, JSON.stringify(pending));
-};
+import { identityKey, offlineSalesStore } from '@/utils/identityStorage';
 
 // --- FUNÇÃO PARA CONSTRUIR ENDEREÇO COMPLETO DE ENTREGA ---
 const construirEnderecoEntrega = (cliente) => {
@@ -298,6 +271,20 @@ const enriquecerItensEncomendaComFornecedor = (itens = [], produtos = [], fornec
 
 export default function PDV() {
   const { user } = useAuth();
+  const { organization, loading, error } = useTenant();
+  if (loading) return <div>Carregando organização...</div>;
+  if (error || !organization?.id || !user?.id) return <div>Entre em uma organização válida para abrir o PDV.</div>;
+  return <PDVSession key={organization.id + ':' + user.id} organizationId={organization.id} userId={user.id} />;
+}
+
+function PDVSession({ organizationId, userId }) {
+  const PDV_STATE_KEY = identityKey('pdv_state', organizationId, userId);
+  const ORCAMENTO_STATE_KEY = identityKey('moveispedroii_pdv_state', organizationId, userId);
+  const offlineStore = offlineSalesStore(organizationId, userId);
+  const getOfflineSales = offlineStore.get;
+  const saveOfflineSale = (sale) => { try { return offlineStore.save(sale); } catch { return false; } };
+  const removeOfflineSale = offlineStore.remove;
+  const { user } = useAuth();
   const { brandName, conferenciaCaixaEnabled, isPaidModuleActive } = useTenant();
   const queryClient = useQueryClient();
   const confirm = useConfirm();
@@ -305,6 +292,7 @@ export default function PDV() {
 
   // Ref para prevenir duplo-clique (mutex)
   const isProcessingRef = useRef(false);
+  const saleOperationRef = useRef(crypto.randomUUID());
 
   // --- ESTADO ONLINE/OFFLINE ---
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -337,7 +325,7 @@ export default function PDV() {
 
           if (novaSolicitacao.status === 'aprovado' || novaSolicitacao.status === 'rejeitado') {
             setItens(prevItens => {
-              const newItens = [...prevItens];
+              const newItens = prevItens.map(item => ({ ...item }));
               const index = newItens.findIndex(item => item.solicitacao_preco_id === novaSolicitacao.id);
 
               if (index !== -1) {
@@ -398,7 +386,7 @@ export default function PDV() {
   const getInitialState = () => {
     try {
       // 1. Tentar pegar estado de conversão de orçamento
-      const orcamentoSaved = sessionStorage.getItem('moveispedroii_pdv_state');
+      const orcamentoSaved = sessionStorage.getItem(ORCAMENTO_STATE_KEY);
       if (orcamentoSaved) {
         const parsed = JSON.parse(orcamentoSaved);
         // NÃO remover aqui — o componente pode re-montar (auth re-check)
@@ -506,7 +494,7 @@ export default function PDV() {
   // e o usuário navega de Orçamentos->PDV, o getInitialState não re-executa.
   // Por isso verificamos o sessionStorage a cada vez que o componente ganha foco.
   const carregarOrcamentoDoSessionStorage = async () => {
-    const orcamentoSaved = sessionStorage.getItem('moveispedroii_pdv_state');
+    const orcamentoSaved = sessionStorage.getItem(ORCAMENTO_STATE_KEY);
     if (!orcamentoSaved) return;
 
     // Bloquear auto-save para não sobrescrever com estado vazio
@@ -514,7 +502,7 @@ export default function PDV() {
 
     try {
       const parsed = JSON.parse(orcamentoSaved);
-      sessionStorage.removeItem('moveispedroii_pdv_state');
+      sessionStorage.removeItem(ORCAMENTO_STATE_KEY);
 
       console.log("📦 Carregando orçamento no PDV:", parsed);
 
@@ -571,7 +559,7 @@ export default function PDV() {
     // Limpar o sessionStorage de orçamento após montagem estável
     // (evita que o double-mount do auth consuma e perca os dados)
     const cleanupTimer = setTimeout(() => {
-      sessionStorage.removeItem('moveispedroii_pdv_state');
+      sessionStorage.removeItem(ORCAMENTO_STATE_KEY);
     }, 1000);
 
     carregarOrcamentoDoSessionStorage();
@@ -828,7 +816,14 @@ export default function PDV() {
   };
 
   const criarVendaMutation = useMutation({
-    mutationFn: (data) => base44.entities.Venda.create(data)
+    mutationFn: async (data) => {
+      const payload = { ...data, id: data.id || saleOperationRef.current, organization_id: organizationId,
+        itens: (data.itens || []).map(item => ({ ...item, origem_estoque_campo: item.origem_estoque_campo || resolveStockField(data.loja) })),
+      };
+      const { data: sale, error } = await supabase.rpc('registrar_venda_pdv', { p_venda: payload });
+      if (error) throw error;
+      return sale;
+    }
   });
 
   // Margem negociável da loja ativa
@@ -884,57 +879,19 @@ export default function PDV() {
 
     for (const vendaOffline of vendasPendentes) {
       try {
-        const { offlineId, ...dadosVenda } = vendaOffline;
+        const { offlineId, offlineUserId, ...dadosVenda } = vendaOffline;
+        const { data: { user: activeUser } } = await supabase.auth.getUser();
+        if (activeUser?.id !== userId || offlineUserId !== userId || dadosVenda.organization_id !== organizationId) throw new Error('Sessão divergente da venda offline');
+        const { data: profile } = await supabase.from('public_users').select('organization_id, ativo').eq('id', activeUser.id).single();
+        if (!profile?.ativo || profile.organization_id !== organizationId) throw new Error('Organização divergente');
         delete dadosVenda.timestamp; // campo de metadado offline, não é campo da entidade Venda
         const vendaCriada = await criarVendaMutation.mutateAsync(dadosVenda);
-
-        const itensVenda = dadosVenda.itens || [];
-        for (const item of itensVenda) {
-          if (!item.produto_id) continue;
-
-          const produtoAtual = await base44.entities.Produto.getById(item.produto_id);
-          if (!produtoAtual) continue;
-
-          const campoOrigem = item?.origem_estoque_campo || resolveStockField(dadosVenda.loja);
-          const estoqueLocalAposVenda = (produtoAtual[campoOrigem] || 0) - (item.quantidade || 0);
-          const updates = montarAtualizacaoEstoqueProdutoPorCampo(produtoAtual, estoqueLocalAposVenda, campoOrigem);
-
-          await base44.entities.Produto.update(item.produto_id, updates);
-        }
-
-        const itensEncomendaComFornecedor = enriquecerItensEncomendaComFornecedor(itensVenda, produtos, fornecedores);
-        const itensEncomenda = itensEncomendaComFornecedor.filter(i => i.is_encomenda);
-        const itensEncomendaInvalidos = itensEncomenda.filter(i => !i.fornecedor_id);
-        const itensEncomendaValidos = itensEncomenda.filter(i => i.fornecedor_id);
-
-        if (itensEncomendaInvalidos.length > 0) {
-          console.warn('[PDV] Encomendas offline sem fornecedor foram ignoradas na sincronizacao', itensEncomendaInvalidos);
-          toast.warning(`⚠️ ${itensEncomendaInvalidos.length} encomenda(s) sem fornecedor nao foram enviadas ao Compras. Conclua o cadastro dos produtos com fornecedor.`);
-        }
-
-        for (const item of itensEncomendaValidos) {
-          await base44.entities.SolicitacaoEncomenda.create({
-            venda_id: vendaCriada.id,
-            produto_id: item.produto_id,
-            produto_nome: item.produto_nome,
-            fornecedor_id: item.fornecedor_id || null,
-            fornecedor_nome: item.fornecedor_nome || '',
-            quantidade: item.quantidade,
-            cliente_nome: dadosVenda.cliente_nome,
-            numero_pedido: dadosVenda.numero_pedido,
-            loja: dadosVenda.loja,
-            loja_id: dadosVenda.loja_id || null,
-            vendedor_id: dadosVenda.responsavel_id || user?.id || null,
-            vendedor_nome: dadosVenda.responsavel_nome || user?.full_name || user?.email || null,
-            status: 'pendente'
-          });
-        }
 
         // Tenta enviar mensagem do robô também na sincronização
         if (dadosVenda.cliente_telefone) {
           fetch(`${ZAP_API_URL}/mensagem-pos-venda`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...(_BOT_API_KEY ? { 'x-bot-api-key': _BOT_API_KEY } : {}) },
+            headers: await getBotAuthHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({
               telefone: dadosVenda.cliente_telefone,
               nome: dadosVenda.cliente_nome,
@@ -967,7 +924,7 @@ export default function PDV() {
       const exists = prev.findIndex(i => i.produto_id === produto.id);
 
       if (exists >= 0) {
-        const newItens = [...prev];
+        const newItens = prev.map(item => ({ ...item }));
         newItens[exists].quantidade += 1;
         newItens[exists].subtotal = newItens[exists].quantidade * newItens[exists].preco_unitario;
         newItens[exists].fornecedor_id = newItens[exists].fornecedor_id || fornecedorResolvido.fornecedor_id;
@@ -1706,32 +1663,9 @@ export default function PDV() {
       // ─── SE MÓDULO DE CONFERÊNCIA ATIVO: parar aqui ───
       // Entrega, montagens e lançamentos financeiros só são criados APÓS a conferência
       // Função de atualização de estoque declarada aqui para uso nos dois fluxos
-      const atualizarEstoqueVenda = async () => {
-        const itensComProduto = itens.filter(item => !!item.produto_id);
-        return medirDuracaoEtapa('atualizar estoque', () =>
-          Promise.all(itensComProduto.map(async (item) => {
-            if (item.variante_id && lojaId) {
-              const estoqueAtual = await getVarianteEstoque(supabase, item.variante_id, lojaId);
-              const novaQtd = estoqueAtual - Number(item.quantidade || 0);
-              const resultado = await atualizarEstoqueVariante(supabase, item.variante_id, lojaId, novaQtd);
-              if (!resultado.success) console.warn('[PDV] Erro ao atualizar estoque da variante:', resultado.error);
-              return resultado;
-            }
-            const prod = await base44.entities.Produto.getById(item.produto_id);
-            if (!prod) return null;
-            const campoOrigem = item?.origem_estoque_campo || resolveStockField(configVenda.loja);
-            const estoqueOrigemAtual = Number(prod?.[campoOrigem] || 0);
-            const estoqueLocalAposVenda = estoqueOrigemAtual - Number(item.quantidade || 0);
-            const updates = montarAtualizacaoEstoqueProdutoPorCampo(prod, estoqueLocalAposVenda, campoOrigem);
-            return base44.entities.Produto.update(prod.id, updates);
-          }))
-        );
-      };
-
       if (conferenciaCaixaEnabled && !pagamentoEntrega.ativo) {
         // Ainda atualizamos estoque (já comprometido)
         atualizarProgressoPedido('Atualizando estoque...', 80);
-        await atualizarEstoqueVenda();
 
         atualizarProgressoPedido('Atualizando paineis...', 90);
         await Promise.all([
@@ -1847,7 +1781,6 @@ export default function PDV() {
       await criarMontagensPromise;
 
       atualizarProgressoPedido('Atualizando estoque...', 80);
-      await atualizarEstoqueVenda();
 
       // Invalidar queries após TODAS as operações serem concluídas
       atualizarProgressoPedido('Atualizando paineis...', 88);
@@ -1865,38 +1798,6 @@ export default function PDV() {
       preencherEImprimirPDF(printWindow, { ...vendaData }, clienteSelecionado, vendedorFinal.nome || user.full_name, lojaAtivaPDV ? { ...lojaAtivaPDV, empresa_nome: brandName } : null);
 
       toast.success("Venda finalizada com sucesso!");
-
-      if (itensEncomenda.length > 0) {
-        executarEmSegundoPlano('criar solicitações de encomenda', async () => {
-          const resultados = await Promise.allSettled(itensEncomenda.map((item) =>
-            base44.entities.SolicitacaoEncomenda.create({
-              venda_id: vendaCriada.id,
-              produto_id: item.produto_id,
-              produto_nome: item.produto_nome,
-              fornecedor_id: item.fornecedor_id || null,
-              fornecedor_nome: item.fornecedor_nome || '',
-              quantidade: item.quantidade,
-              cliente_nome: clienteSelecionado.nome_completo,
-              numero_pedido: novoNumero,
-              loja: configVenda.loja,
-              loja_id: lojaId,
-              vendedor_id: vendedorFinal.id || null,
-              vendedor_nome: vendedorFinal.nome || null,
-              status: 'pendente'
-            })
-          ));
-
-          const falhas = resultados.filter((resultado) => resultado.status === 'rejected');
-          if (falhas.length > 0) {
-            console.error('Erro ao criar solicitações de encomenda:', falhas);
-            toast.warning(`Venda concluida, mas ${falhas.length} encomenda(s) precisarao de revisao no Compras.`);
-          } else {
-            toast.info(`📦 ${itensEncomenda.length} item(ns) enviado(s) como encomenda ao Setor de Compras`);
-          }
-
-          await queryClient.invalidateQueries({ queryKey: ['solicitacoes_encomenda'] });
-        });
-      }
 
       if (cupomAplicado) {
         executarEmSegundoPlano('atualizar uso de cupom', async () => {
@@ -2061,6 +1962,7 @@ export default function PDV() {
   };
 
   const resetForm = () => {
+    saleOperationRef.current = crypto.randomUUID();
     setClienteSelecionado(null);
     setItens([]);
     setPagamentos([]);

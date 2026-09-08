@@ -1028,11 +1028,7 @@ export default function Compras() {
   return (
     <div className="space-y-4 p-6 bg-gray-50 min-h-screen">
       {/* Header */}
-      <div className="flex justify-between items-center mb-2">
-        <div>
-          <h1 className="text-3xl font-bold">Compras</h1>
-          <p className="text-gray-500 text-sm mt-1">Gestão integral: Ordens de Compra, Encomendas e Análises por Fornecedor</p>
-        </div>
+      <div className="flex justify-end items-center mb-2">
         <div className="flex gap-2">
           {temPermissaoReajusteGlobal && (
             <Button

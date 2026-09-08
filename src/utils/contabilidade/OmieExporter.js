@@ -74,7 +74,7 @@ export function exportarProdutosOmie(produtos) {
 
     const linhas = produtos.map(p => {
         return [
-            p.codigo_barras || p.id || '',
+            p.sku || p.id || '',
             `"${(p.nome || '').replace(/"/g, '""')}"`,
             mapearCategoriaOmie(p.categoria),
             'UN',

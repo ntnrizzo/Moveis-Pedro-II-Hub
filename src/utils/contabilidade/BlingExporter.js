@@ -4,6 +4,8 @@
  * Gera arquivo XML compatível com importação Bling ERP
  */
 
+import { isValidGTIN } from '../gtinValidator';
+
 const formatarData = (data) => {
     if (!data) return '';
     const d = new Date(data);
@@ -45,7 +47,7 @@ export function exportarPedidosBling(vendas) {
             <itens>
                 ${(v.itens || []).map(item => `
                     <item>
-                        <codigo>${escaparXML(item.produto_codigo || item.produto_id || '')}</codigo>
+                        <codigo>${escaparXML(item.produto_sku || item.sku || item.produto_codigo || item.produto_id || '')}</codigo>
                         <descricao>${escaparXML(item.produto_nome || 'Produto')}</descricao>
                         <qtde>${item.quantidade || 1}</qtde>
                         <vlr_unit>${formatarValor(item.preco_unitario)}</vlr_unit>
@@ -69,9 +71,13 @@ export function exportarPedidosBling(vendas) {
  * Exporta produtos para formato Bling XML
  */
 export function exportarProdutosBling(produtos) {
-    const itens = produtos.map(p => `
+    const itens = produtos.map(p => {
+        const codigoValido = p.sku || p.id || '';
+        const gtinValido = isValidGTIN(p.codigo_barras) ? p.codigo_barras : '';
+        return `
         <produto>
-            <codigo>${escaparXML(p.codigo_barras || p.id)}</codigo>
+            <codigo>${escaparXML(codigoValido)}</codigo>
+            ${gtinValido ? `<gtin>${escaparXML(gtinValido)}</gtin>` : ''}
             <descricao>${escaparXML(p.nome)}</descricao>
             <un>UN</un>
             <vlr_unit>${formatarValor(p.preco_venda)}</vlr_unit>
@@ -88,7 +94,8 @@ export function exportarProdutosBling(produtos) {
             <unidadeMedida>UN</unidadeMedida>
             <categoria>${escaparXML(p.categoria || 'Móveis')}</categoria>
         </produto>
-    `).join('');
+    `;
+    }).join('');
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <produtos>

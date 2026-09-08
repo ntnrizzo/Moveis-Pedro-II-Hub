@@ -94,10 +94,16 @@ export default function ResultadosBusca({ titulo, icon: Icon, dados, tipo, onCli
                 <div className="font-semibold text-gray-900 dark:text-white mb-1">
                   {destacarTexto(item.nome, termo)}
                 </div>
-                <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-400">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
                   <Badge variant="outline">{item.categoria}</Badge>
+                  {item.sku && (
+                    <span className="text-xs font-mono font-medium text-gray-800 dark:text-gray-200">SKU: {destacarTexto(item.sku, termo)}</span>
+                  )}
                   {item.codigo_barras && (
-                    <span className="text-xs">🔢 {destacarTexto(item.codigo_barras, termo)}</span>
+                    <span className="text-xs font-mono text-gray-600 dark:text-gray-400">EAN: {destacarTexto(item.codigo_barras, termo)}</span>
+                  )}
+                  {item.modelo_referencia && (
+                    <span className="text-xs text-gray-500">Ref: {destacarTexto(item.modelo_referencia, termo)}</span>
                   )}
                 </div>
                 <div className="flex gap-4 mt-2 text-xs">

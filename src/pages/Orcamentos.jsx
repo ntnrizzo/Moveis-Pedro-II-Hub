@@ -1,3 +1,4 @@
+import { identityKey } from '@/utils/identityStorage';
 import React, { useState, useEffect } from "react";
 import { base44, supabase } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -100,7 +101,10 @@ export default function Orcamentos() {
             // Marcar o orçamento como Convertido para impedir dupla conversão
             await base44.entities.Orcamento.update(orcamentoFull.id, { status: 'Convertido' });
             queryClient.invalidateQueries({ queryKey: ['orcamentos'] });
-            sessionStorage.setItem('moveispedroii_pdv_state', JSON.stringify(pdvState));
+            const { data: { session: pdvSession } } = await supabase.auth.getSession();
+            const { data: pdvProfile, error: pdvProfileError } = await supabase.from('public_users').select('organization_id').eq('id', pdvSession?.user?.id).single();
+            if (pdvProfileError || !pdvProfile?.organization_id) throw new Error('Organização indisponível');
+            sessionStorage.setItem(identityKey('moveispedroii_pdv_state', pdvProfile.organization_id, pdvSession.user.id), JSON.stringify(pdvState));
             // Disparar evento customizado para o PDV detectar (SPA)
             window.dispatchEvent(new Event('orcamento-para-pdv'));
             navigate(createPageUrl("PDV"));
@@ -175,11 +179,7 @@ export default function Orcamentos() {
 
     return (
         <div className="max-w-7xl mx-auto space-y-6">
-            <div className="flex justify-between items-center">
-                <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Orçamentos</h1>
-                    <p className="text-sm text-gray-500">Gerencie orçamentos e propostas</p>
-                </div>
+            <div className="flex justify-end items-center">
                 <Button
                     onClick={() => { setEditingOrcamento(null); setIsModalOpen(true); }}
                     className="bg-green-700 hover:bg-green-800 text-white font-medium"

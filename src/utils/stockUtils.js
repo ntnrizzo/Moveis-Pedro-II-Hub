@@ -118,14 +118,20 @@ export async function atualizarEstoqueVariante(supabase, varianteId, lojaId, nov
         return { success: false, error: 'variante_id e loja_id são obrigatórios' };
     }
 
+    if (!Number.isSafeInteger(novaQuantidade) || novaQuantidade < 0) return { success: false, error: 'Quantidade inválida' };
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    if (authError || !user) return { success: false, error: 'Não autenticado' };
+    const { data: profile, error: profileError } = await supabase.from('public_users').select('organization_id, ativo').eq('id', user.id).single();
+    if (profileError || !profile?.ativo || !profile.organization_id || (organizationId && organizationId !== profile.organization_id)) return { success: false, error: 'Organização inválida' };
+    organizationId = profile.organization_id;
     const { error } = await supabase
         .from('estoque')
         .upsert(
             {
                 variante_id: varianteId,
                 loja_id: lojaId,
-                quantidade: Math.max(0, Number(novaQuantidade) || 0),
-                organization_id: organizationId || null
+                quantidade: novaQuantidade,
+                organization_id: organizationId
             },
             { onConflict: 'variante_id,loja_id' }
         );

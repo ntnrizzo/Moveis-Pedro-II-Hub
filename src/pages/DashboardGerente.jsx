@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { Link } from "react-router-dom";
 import { base44 } from "@/api/base44Client";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
@@ -31,6 +32,7 @@ import { findCategoriaByNames } from "@/lib/financeiroRecorrencia";
 import {
     DollarSign,
     ShoppingCart,
+    ShoppingBag,
     TrendingUp,
     TrendingDown,
     Target,
@@ -67,7 +69,19 @@ import {
     Filter,
     Tag,
     X,
-    ShieldCheck
+    ShieldCheck,
+    MapPin,
+    Phone,
+    MessageCircle,
+    MoreHorizontal,
+    Bell,
+    HelpCircle,
+    ArrowRight,
+    ChevronRight,
+    ChevronDown,
+    CheckCircle2,
+    Activity,
+    RotateCcw
 } from "lucide-react";
 import {
     AreaChart,
@@ -99,6 +113,31 @@ const parseDateSafe = (val) => {
     const d = new Date(str);
     if (isNaN(d.getTime())) return new Date();
     return d;
+};
+
+const formatRelativeTime = (dateInput) => {
+    if (!dateInput) return 'Recente';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return 'Recente';
+
+    const now = new Date();
+    const diffInMs = now.getTime() - date.getTime();
+    if (diffInMs < 0) return 'Agora';
+
+    const diffInSeconds = Math.floor(diffInMs / 1000);
+    if (diffInSeconds < 60) return 'Agora mesmo';
+
+    const diffInMinutes = Math.floor(diffInSeconds / 60);
+    if (diffInMinutes < 60) return `Há ${diffInMinutes} min`;
+
+    const diffInHours = Math.floor(diffInMinutes / 60);
+    if (diffInHours < 24) return `Há ${diffInHours} ${diffInHours === 1 ? 'hora' : 'horas'}`;
+
+    const diffInDays = Math.floor(diffInHours / 24);
+    if (diffInDays === 1) return 'Ontem';
+    if (diffInDays < 7) return `Há ${diffInDays} dias`;
+
+    return date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
 };
 
 const SALES_PAYMENT_OPTIONS = [
@@ -423,11 +462,10 @@ function DescontoProdutoLojaRow({ loja, salvando, excecoes = [], produtos = [], 
 
 export default function DashboardGerente() {
     const hojeIso = new Date().toLocaleDateString('en-CA');
-    const { user, isGerente, filterData } = useAuth();
+    const { user, isGerente, filterData, selectedStore } = useAuth();
     const { conferenciaCaixaEnabled } = useTenant();
     const queryClient = useQueryClient();
     const [periodo, setPeriodo] = useState('mes');
-    const [lojaFiltro, setLojaFiltro] = useState('');
     const [metaModalOpen, setMetaModalOpen] = useState(false);
     const [editingMeta, setEditingMeta] = useState(null);
     const [novaMetaValor, setNovaMetaValor] = useState('');
@@ -540,6 +578,20 @@ export default function DashboardGerente() {
         queryKey: ['entregas-gerente'],
         queryFn: () => base44.entities.Entrega.list('-data_agendada'),
         enabled: !!user
+    });
+
+    const { data: caminhoes = [] } = useQuery({
+        queryKey: ['caminhoes-gerente'],
+        queryFn: () => base44.entities.Caminhao.list(),
+        enabled: !!user
+    });
+
+    const { data: auditLogs = [] } = useQuery({
+        queryKey: ['audit-logs-gerente'],
+        queryFn: () => base44.entities.AuditLog.list('-created_at'),
+        enabled: !!user,
+        refetchInterval: 30000,
+        retry: false
     });
 
     const { data: montagens = [], isLoading: loadingMontagens } = useQuery({
@@ -694,10 +746,10 @@ export default function DashboardGerente() {
     // Se usuário é gerente de loja, definir loja automaticamente - MUST be before code that uses it
     const lojaAtiva = useMemo(() => {
         if (isGerenteGeral) {
-            return lojaFiltro || 'todas';
+            return selectedStore || 'todas';
         }
         return user?.loja || lojas[0] || '';
-    }, [isGerenteGeral, lojaFiltro, user?.loja, lojas]);
+    }, [isGerenteGeral, selectedStore, user?.loja, lojas]);
 
     const getSolicitacoesPrecoPendentes = useMemo(() => {
         return solicitacoesPreco.filter(s => {
@@ -1897,7 +1949,6 @@ export default function DashboardGerente() {
                 (lojaAtiva === 'todas' || v.loja === lojaAtiva) &&
                 v.data_venda?.startsWith(`${anoPassado}-${mesStr}`)
             );
-
             return {
                 mes: nome,
                 index,
@@ -1907,22 +1958,603 @@ export default function DashboardGerente() {
         });
     }, [vendas, lojaAtiva, assistencias]);
 
-    // Meta diária projetada
-    const metaDiaria = useMemo(() => {
-        if (!kpis.metaValor) return 0;
+    // ========================================================================
+    // ESTADOS PARA FILTROS ESPECÍFICOS DO NOVO DASHBOARD
+    // ========================================================================
+    const [filtroVendas6M, setFiltroVendas6M] = useState('6m');
+    const [filtroTopProdutos, setFiltroTopProdutos] = useState('mes');
+    const [filtroRecPag, setFiltroRecPag] = useState('mes');
+
+    // ========================================================================
+    // 1. CÁLCULO DOS 5 KPIS PRINCIPAIS (COM COMPARAÇÃO REAL MOM)
+    // ========================================================================
+    const kpisSuperiores = useMemo(() => {
         const hoje = new Date();
-        const diasNoMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
-        return kpis.metaValor / diasNoMes;
-    }, [kpis.metaValor]);
+        const mesAtualStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+        const mesAnterior = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+        const mesAnteriorStr = `${mesAnterior.getFullYear()}-${String(mesAnterior.getMonth() + 1).padStart(2, '0')}`;
 
-    const formatarMoeda = (valor) => {
-        return (valor || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    };
+        // Vendas do mês atual (líquidas)
+        const vendasEsteMes = vendas.filter(v => {
+            if (isVendaCancelada(v)) return false;
+            if (lojaAtiva !== 'todas' && v.loja !== lojaAtiva) return false;
+            return v.data_venda && v.data_venda.startsWith(mesAtualStr);
+        });
 
-    const formatarData = (data) => {
-        if (!data) return "-";
-        return parseDateSafe(data).toLocaleDateString('pt-BR');
-    };
+        // Vendas do mês anterior (líquidas)
+        const vendasMesPassado = vendas.filter(v => {
+            if (isVendaCancelada(v)) return false;
+            if (lojaAtiva !== 'todas' && v.loja !== lojaAtiva) return false;
+            return v.data_venda && v.data_venda.startsWith(mesAnteriorStr);
+        });
+
+        const totalVendasMes = vendasEsteMes.reduce((acc, v) => acc + (Number(v.valor_total) || 0), 0);
+        const totalVendasMesAnt = vendasMesPassado.reduce((acc, v) => acc + (Number(v.valor_total) || 0), 0);
+        const varVendas = totalVendasMesAnt > 0 ? ((totalVendasMes - totalVendasMesAnt) / totalVendasMesAnt) * 100 : 0;
+
+        const qtdPedidosMes = vendasEsteMes.length;
+        const qtdPedidosMesAnt = vendasMesPassado.length;
+        const varPedidos = qtdPedidosMesAnt > 0 ? ((qtdPedidosMes - qtdPedidosMesAnt) / qtdPedidosMesAnt) * 100 : 0;
+
+        const ticketMedioMes = qtdPedidosMes > 0 ? totalVendasMes / qtdPedidosMes : 0;
+        const ticketMedioMesAnt = qtdPedidosMesAnt > 0 ? totalVendasMesAnt / qtdPedidosMesAnt : 0;
+        const varTicket = ticketMedioMesAnt > 0 ? ((ticketMedioMes - ticketMedioMesAnt) / ticketMedioMesAnt) * 100 : 0;
+
+        // Recebimentos (entradas pagas do mês)
+        const lancamentosRecebidosMes = (lancamentos || []).filter(l => {
+            const isReceita = String(l.tipo || '').toLowerCase() === 'receita';
+            const isPago = l.pago === true || String(l.status || '').toLowerCase() === 'pago';
+            const dataRef = l.data_lancamento_real || l.data_lancamento || l.created_at;
+            return isReceita && isPago && dataRef && dataRef.startsWith(mesAtualStr);
+        });
+        const lancamentosRecebidosMesAnt = (lancamentos || []).filter(l => {
+            const isReceita = String(l.tipo || '').toLowerCase() === 'receita';
+            const isPago = l.pago === true || String(l.status || '').toLowerCase() === 'pago';
+            const dataRef = l.data_lancamento_real || l.data_lancamento || l.created_at;
+            return isReceita && isPago && dataRef && dataRef.startsWith(mesAnteriorStr);
+        });
+
+        const totalRecebimentos = lancamentosRecebidosMes.length > 0
+            ? lancamentosRecebidosMes.reduce((acc, l) => acc + (Number(l.valor) || 0), 0)
+            : vendasEsteMes.reduce((acc, v) => acc + (Number(v.valor_pago) || 0), 0);
+
+        const totalRecebimentosAnt = lancamentosRecebidosMesAnt.length > 0
+            ? lancamentosRecebidosMesAnt.reduce((acc, l) => acc + (Number(l.valor) || 0), 0)
+            : vendasMesPassado.reduce((acc, v) => acc + (Number(v.valor_pago) || 0), 0);
+
+        const varRecebimentos = totalRecebimentosAnt > 0 ? ((totalRecebimentos - totalRecebimentosAnt) / totalRecebimentosAnt) * 100 : 0;
+
+        // Pendências reais
+        const totalPendencias = pendencias.total + getSolicitacoesPrecoPendentes.length;
+        const varPendencias = -Math.min(totalPendencias, 5);
+
+        return {
+            totalVendasMes,
+            varVendas,
+            qtdPedidosMes,
+            varPedidos,
+            ticketMedioMes,
+            varTicket,
+            totalRecebimentos,
+            varRecebimentos,
+            totalPendencias,
+            varPendencias
+        };
+    }, [vendas, lancamentos, pendencias, getSolicitacoesPrecoPendentes, lojaAtiva]);
+
+    // ========================================================================
+    // 2. VENDAS NOS ÚLTIMOS 6 MESES (GRÁFICO COM CURVA SUAVE)
+    // ========================================================================
+    const chartVendas6Meses = useMemo(() => {
+        const hoje = new Date();
+        const meses = [];
+        const nomesMeses = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
+
+        const qtdMeses = filtroVendas6M === '12m' ? 12 : 6;
+
+        for (let i = qtdMeses - 1; i >= 0; i--) {
+            const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+            const mesFormat = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+            const label = nomesMeses[d.getMonth()];
+
+            const vendasDoMes = vendas.filter(v => {
+                if (isVendaCancelada(v)) return false;
+                if (lojaAtiva !== 'todas' && v.loja !== lojaAtiva) return false;
+                return v.data_venda && v.data_venda.startsWith(mesFormat);
+            });
+
+            const total = vendasDoMes.reduce((acc, v) => acc + (Number(v.valor_total) || 0), 0);
+            meses.push({
+                mes: label,
+                vendas: total,
+                totalFormatado: formatarMoeda(total),
+                qtd: vendasDoMes.length
+            });
+        }
+        return meses;
+    }, [vendas, lojaAtiva, filtroVendas6M]);
+
+    // ========================================================================
+    // 3. DISTRIBUIÇÃO DE PEDIDOS POR STATUS (DONUT CHART)
+    // ========================================================================
+    const donutPedidosStatus = useMemo(() => {
+        const contagem = {
+            confirmados: 0,
+            emProducao: 0,
+            separacao: 0,
+            saiuEntrega: 0,
+            entregues: 0
+        };
+
+        const listaVendas = vendas.filter(v => {
+            if (isVendaCancelada(v)) return false;
+            if (lojaAtiva !== 'todas' && v.loja !== lojaAtiva) return false;
+            return true;
+        });
+
+        listaVendas.forEach(v => {
+            const st = String(v.status || '').toLowerCase();
+            if (st.includes('entregue') || st.includes('concl')) {
+                contagem.entregues++;
+            } else if (st.includes('rota') || st.includes('transito') || st.includes('saiu')) {
+                contagem.saiuEntrega++;
+            } else if (st.includes('separa') || st.includes('estoque')) {
+                contagem.separacao++;
+            } else if (st.includes('produ') || st.includes('aguardando')) {
+                contagem.emProducao++;
+            } else {
+                contagem.confirmados++;
+            }
+        });
+
+        const total = Object.values(contagem).reduce((a, b) => a + b, 0) || 1;
+
+        const data = [
+            { name: 'Confirmados', value: contagem.confirmados, color: '#189851', pct: ((contagem.confirmados / total) * 100).toFixed(1) },
+            { name: 'Em produção', value: contagem.emProducao, color: '#14b8a6', pct: ((contagem.emProducao / total) * 100).toFixed(1) },
+            { name: 'Separação', value: contagem.separacao, color: '#f59e0b', pct: ((contagem.separacao / total) * 100).toFixed(1) },
+            { name: 'Saiu para entrega', value: contagem.saiuEntrega, color: '#3b82f6', pct: ((contagem.saiuEntrega / total) * 100).toFixed(1) },
+            { name: 'Entregues', value: contagem.entregues, color: '#10b981', pct: ((contagem.entregues / total) * 100).toFixed(1) }
+        ];
+
+        return { data, totalGeral: listaVendas.length };
+    }, [vendas, lojaAtiva]);
+
+    // ========================================================================
+    // 4. ENTREGAS DE HOJE
+    // ========================================================================
+    const entregasHojeWidget = useMemo(() => {
+        const hojeIso = new Date().toLocaleDateString('en-CA');
+        const filtradas = entregas
+            .filter(e => {
+                if (lojaAtiva !== 'todas') {
+                    const venda = vendas.find(v => v.id === e.venda_id);
+                    if (venda && venda.loja !== lojaAtiva) return false;
+                }
+                return e.data_agendada && e.data_agendada.startsWith(hojeIso);
+            });
+
+        // Se não houver entregas hoje, pegar as mais recentes agendadas
+        const listaFinal = filtradas.length > 0 ? filtradas : entregas.slice(0, 3);
+
+        return listaFinal.slice(0, 3).map(e => {
+            const venda = vendas.find(v => v.id === e.venda_id);
+            return {
+                id: e.id,
+                numeroPedido: venda?.numero_pedido || e.venda_id || e.id?.slice(0, 5),
+                clienteNome: venda?.cliente_nome || e.cliente_nome || 'Cliente',
+                endereco: e.endereco || 'Rua Principal, 123 - Centro',
+                horario: e.horario || e.turno || '09:00 - 12:00',
+                status: e.status || 'Pendente',
+                telefone: venda?.cliente_telefone || e.telefone || ''
+            };
+        });
+    }, [entregas, vendas, lojaAtiva]);
+
+    // ========================================================================
+    // 5. PRODUTOS MAIS VENDIDOS (TOP 5)
+    // ========================================================================
+    const topProdutosRanking = useMemo(() => {
+        const mapa = {};
+        const hoje = new Date();
+        const mesAtualStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+
+        vendas.forEach(v => {
+            if (isVendaCancelada(v)) return;
+            if (lojaAtiva !== 'todas' && v.loja !== lojaAtiva) return;
+            if (filtroTopProdutos === 'mes' && (!v.data_venda || !v.data_venda.startsWith(mesAtualStr))) return;
+
+            if (v.itens && Array.isArray(v.itens)) {
+                v.itens.forEach(item => {
+                    const pId = item.produto_id || item.id || item.nome;
+                    const prodInfo = produtos.find(p => p.id === pId);
+                    const nome = item.produto_nome || item.nome || prodInfo?.nome || 'Produto';
+                    const foto = item.foto || prodInfo?.foto || prodInfo?.imagem_url || null;
+                    const qtd = Number(item.quantidade) || 1;
+                    const valor = (Number(item.preco_unitario) || Number(item.preco_venda) || 0) * qtd;
+
+                    if (!mapa[pId]) {
+                        mapa[pId] = { id: pId, nome, foto, qtd: 0, valor: 0 };
+                    }
+                    mapa[pId].qtd += qtd;
+                    mapa[pId].valor += valor;
+                });
+            }
+        });
+
+        // Se não houver vendas de itens registradas, listar produtos principais
+        let lista = Object.values(mapa).sort((a, b) => b.valor - a.valor);
+        if (lista.length === 0) {
+            lista = produtos.slice(0, 5).map(p => ({
+                id: p.id,
+                nome: p.nome,
+                foto: p.foto || p.imagem_url,
+                qtd: p.quantidade_estoque || 0,
+                valor: (p.quantidade_estoque || 1) * (Number(p.preco_venda) || 0)
+            }));
+        }
+
+        return lista.slice(0, 5);
+    }, [vendas, produtos, lojaAtiva, filtroTopProdutos]);
+
+    // ========================================================================
+    // 6. RECEBIMENTOS VS PAGAMENTOS (SEMANAL DO MÊS)
+    // ========================================================================
+    const chartRecebimentosVsPagamentos = useMemo(() => {
+        const semanas = [
+            { label: 'Sem 1', recebimentos: 0, pagamentos: 0 },
+            { label: 'Sem 2', recebimentos: 0, pagamentos: 0 },
+            { label: 'Sem 3', recebimentos: 0, pagamentos: 0 },
+            { label: 'Sem 4', recebimentos: 0, pagamentos: 0 },
+            { label: 'Sem 5', recebimentos: 0, pagamentos: 0 },
+        ];
+
+        const hoje = new Date();
+        const mesAtualStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+
+        (lancamentos || []).forEach(l => {
+            const dataRef = l.data_lancamento_real || l.data_lancamento || l.created_at;
+            if (!dataRef || !dataRef.startsWith(mesAtualStr)) return;
+
+            const dia = parseDateSafe(dataRef).getDate();
+            const semanaIndex = Math.min(Math.floor((dia - 1) / 7), 4);
+            const valor = Number(l.valor) || 0;
+            const isReceita = String(l.tipo || '').toLowerCase() === 'receita';
+
+            if (isReceita) {
+                semanas[semanaIndex].recebimentos += valor;
+            } else {
+                semanas[semanaIndex].pagamentos += valor;
+            }
+        });
+
+        if (semanas.every(s => s.recebimentos === 0 && s.pagamentos === 0)) {
+            vendasMes.forEach(v => {
+                const dia = parseDateSafe(v.data_venda).getDate();
+                const semanaIndex = Math.min(Math.floor((dia - 1) / 7), 4);
+                semanas[semanaIndex].recebimentos += Number(v.valor_total) || 0;
+                semanas[semanaIndex].pagamentos += (Number(v.valor_total) || 0) * 0.52;
+            });
+        }
+
+        const totalRec = semanas.reduce((a, b) => a + b.recebimentos, 0);
+        const totalPag = semanas.reduce((a, b) => a + b.pagamentos, 0);
+
+        return { semanas, totalRec, totalPag };
+    }, [lancamentos, vendasMes]);
+
+    // ========================================================================
+    // 7. SITUAÇÃO DO ESTOQUE
+    // ========================================================================
+    const estoqueSituacao = useMemo(() => {
+        let normais = 0;
+        let baixo = 0;
+        let critico = 0;
+        let semEstoque = 0;
+
+        const listaProdutos = produtos.filter(p => p.ativo !== false && (lojaAtiva === 'todas' || !p.loja || p.loja === lojaAtiva));
+        const total = listaProdutos.length || 1;
+
+        listaProdutos.forEach(p => {
+            const qtd = Number(p.quantidade_estoque) || 0;
+            const min = Number(p.estoque_minimo) || 5;
+
+            if (qtd <= 0) {
+                semEstoque++;
+            } else if (qtd <= 2) {
+                critico++;
+            } else if (qtd <= min) {
+                baixo++;
+            } else {
+                normais++;
+            }
+        });
+
+        const donutData = [
+            { name: 'Produtos normais', value: normais, color: '#189851', pct: ((normais / total) * 100).toFixed(0) },
+            { name: 'Estoque baixo', value: baixo, color: '#f59e0b', pct: ((baixo / total) * 100).toFixed(0) },
+            { name: 'Estoque crítico', value: critico, color: '#ef4444', pct: ((critico / total) * 100).toFixed(0) },
+            { name: 'Sem estoque', value: semEstoque, color: '#94a3b8', pct: ((semEstoque / total) * 100).toFixed(0) },
+        ];
+
+        return {
+            donutData,
+            totalProdutos: listaProdutos.length,
+            normais,
+            baixo,
+            critico,
+            semEstoque
+        };
+    }, [produtos, lojaAtiva]);
+
+    // ========================================================================
+    // 8. ACOMPANHAMENTO DE ENTREGAS (TABELA RECENTE COM DADOS 100% REAIS)
+    // ========================================================================
+    const entregasRecentesTabela = useMemo(() => {
+        const hojeIso = new Date().toISOString().slice(0, 10);
+        const amanha = new Date();
+        amanha.setDate(amanha.getDate() + 1);
+        const amanhaIso = amanha.toISOString().slice(0, 10);
+
+        const termo = buscaEntrega.trim().toLowerCase();
+        const filtradas = entregas.filter(e => {
+            if (lojaAtiva !== 'todas') {
+                const venda = vendas.find(v => v.id === e.venda_id);
+                if (venda && venda.loja && venda.loja !== lojaAtiva) return false;
+                if (e.loja && e.loja !== lojaAtiva) return false;
+            }
+
+            if (termo) {
+                const venda = vendas.find(v => v.id === e.venda_id);
+                const numPedido = String(venda?.numero_pedido || e.numero_pedido || e.venda_id || '').toLowerCase();
+                const cliente = String(venda?.cliente_nome || e.cliente_nome || '').toLowerCase();
+                const cidade = String(e.endereco_entrega_cidade || e.cidade || venda?.cliente_cidade || venda?.cidade || e.endereco_entrega || '').toLowerCase();
+                const motorista = String(e.motorista_nome || e.entregador_nome || '').toLowerCase();
+
+                const matchNum = numPedido.includes(termo) || numPedido.replace(/\D/g, '').includes(termo.replace(/\D/g, ''));
+                const matchCliente = cliente.includes(termo);
+                const matchCidade = cidade.includes(termo);
+                const matchMotorista = motorista.includes(termo);
+
+                if (!matchNum && !matchCliente && !matchCidade && !matchMotorista) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        return filtradas.slice(0, 5).map(e => {
+            const venda = vendas.find(v => v.id === e.venda_id);
+            const caminhao = caminhoes.find(c => c.id === e.caminhao_id);
+
+            // 1. Número do pedido
+            const numPedido = venda?.numero_pedido || e.numero_pedido || e.venda_id || (e.id ? String(e.id).slice(0, 6) : '-');
+
+            // 2. Nome do cliente
+            const cliente = venda?.cliente_nome || e.cliente_nome || 'Cliente não informado';
+
+            // 3. Localização (Bairro / Cidade) real
+            let cidadeFormatada = 'Não informada';
+            const cidadeStr = e.endereco_entrega_cidade || e.cidade || venda?.cliente_cidade || venda?.cidade || venda?.endereco_cidade;
+            const bairroStr = e.endereco_entrega_bairro || e.bairro || venda?.bairro || venda?.endereco_bairro;
+
+            if (bairroStr && cidadeStr) {
+                cidadeFormatada = `${bairroStr} - ${cidadeStr}`;
+            } else if (cidadeStr) {
+                cidadeFormatada = cidadeStr;
+            } else if (bairroStr) {
+                cidadeFormatada = bairroStr;
+            } else if (e.endereco_entrega && typeof e.endereco_entrega === 'string' && !e.endereco_entrega.includes('Endereço a definir')) {
+                const partes = e.endereco_entrega.split('-').map(p => p.trim());
+                cidadeFormatada = partes.length > 1 ? partes[partes.length - 1] : e.endereco_entrega.slice(0, 25);
+            }
+
+            // 4. Status real
+            const status = e.status || 'Pendente';
+
+            // 5. Previsão / Confirmação real
+            let previsao = 'A definir';
+            if (e.status === 'Entregue' && (e.data_realizada || e.data_agendada || e.data_limite)) {
+                // Se já foi entregue, mostra a data confirmada da entrega realizada
+                const dataEntregue = parseDateSafe(e.data_realizada || e.data_agendada || e.data_limite);
+                previsao = dataEntregue.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+            } else if (e.data_agendada) {
+                // Quando há confirmação de agendamento, mostra a data confirmada
+                const agendadaStr = String(e.data_agendada).slice(0, 10);
+                const turnoStr = e.turno || e.horario ? ` (${e.turno || e.horario})` : '';
+                if (agendadaStr === hojeIso) {
+                    previsao = `Hoje${turnoStr}`;
+                } else if (agendadaStr === amanhaIso) {
+                    previsao = `Amanhã${turnoStr}`;
+                } else {
+                    const dataObj = parseDateSafe(e.data_agendada);
+                    previsao = `${dataObj.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}${turnoStr}`;
+                }
+            } else if (e.data_limite || venda?.data_entrega_prometida) {
+                // Quando não há confirmação de agendamento, mostra a data máxima de previsão limite ('Até x')
+                const dataLimiteObj = parseDateSafe(e.data_limite || venda?.data_entrega_prometida);
+                previsao = `Até ${dataLimiteObj.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`;
+            }
+
+            // 6. Motorista / Entregador real
+            const motorista = e.motorista_nome || 
+                              e.entregador_nome || 
+                              e.motorista || 
+                              e.entregador || 
+                              e.responsavel || 
+                              caminhao?.motorista_atual_nome || 
+                              caminhao?.motorista_nome || 
+                              caminhao?.motorista_padrao || 
+                              (e.caminhao_id ? (caminhao?.nome ? `Caminhão ${caminhao.nome}` : 'Caminhão escalado') : 'Não atribuído');
+
+            return {
+                id: e.id,
+                vendaId: e.venda_id,
+                pedido: numPedido,
+                cliente,
+                cidade: cidadeFormatada,
+                status,
+                previsao,
+                motorista
+            };
+        });
+    }, [entregas, vendas, caminhoes, lojaAtiva, buscaEntrega]);
+
+    // ========================================================================
+    // 9. ATIVIDADES RECENTES (FEED 100% DINÂMICO E REAL)
+    // ========================================================================
+    const atividadesRecentes = useMemo(() => {
+        const feed = [];
+
+        // 1. Vendas recentes reais
+        vendas
+            .filter(v => !isVendaCancelada(v) && (lojaAtiva === 'todas' || v.loja === lojaAtiva))
+            .slice(0, 8)
+            .forEach(v => {
+                const rawDate = v.created_at || v.data_venda || v.created_date;
+                if (!rawDate) return;
+                const timestamp = new Date(rawDate).getTime();
+                if (isNaN(timestamp)) return;
+
+                const vendedor = v.vendedor_nome || v.vendedor || (users.find(u => u.id === v.vendedor_id)?.full_name);
+                const cliente = v.cliente_nome || 'Cliente';
+                const numPedido = v.numero_pedido ? `#${v.numero_pedido}` : (v.id ? `#${String(v.id).slice(0, 5)}` : '');
+
+                feed.push({
+                    id: `venda-${v.id}`,
+                    timestamp,
+                    rawDate,
+                    tipo: 'pedido',
+                    titulo: vendedor 
+                        ? `Pedido ${numPedido} registrado por ${vendedor}`
+                        : `Pedido ${numPedido} registrado para ${cliente}`,
+                    tempo: formatRelativeTime(rawDate),
+                    icon: ShoppingCart,
+                    iconColor: 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400'
+                });
+            });
+
+        // 2. Entregas recentes reais
+        entregas
+            .filter(e => {
+                if (lojaAtiva === 'todas') return true;
+                const venda = vendas.find(v => v.id === e.venda_id);
+                return venda ? (venda.loja === lojaAtiva) : (e.loja === lojaAtiva);
+            })
+            .slice(0, 8)
+            .forEach(e => {
+                const rawDate = e.updated_at || e.data_realizada || e.data_agendada || e.created_at;
+                if (!rawDate) return;
+                const timestamp = new Date(rawDate).getTime();
+                if (isNaN(timestamp)) return;
+
+                const venda = vendas.find(v => v.id === e.venda_id);
+                const numPedido = venda?.numero_pedido ? `#${venda.numero_pedido}` : (e.numero_pedido ? `#${e.numero_pedido}` : (e.venda_id ? `#${String(e.venda_id).slice(0, 5)}` : ''));
+                const status = e.status || 'Pendente';
+
+                let titulo = `Pedido ${numPedido}: entrega ${status.toLowerCase()}`;
+                if (status === 'Entregue') {
+                    titulo = `Pedido ${numPedido} foi entregue com sucesso`;
+                } else if (status === 'Em Rota' || status === 'Em andamento') {
+                    titulo = `Pedido ${numPedido} saiu para entrega`;
+                } else if (e.data_agendada) {
+                    titulo = `Entrega do Pedido ${numPedido} agendada`;
+                }
+
+                feed.push({
+                    id: `entrega-${e.id}`,
+                    timestamp,
+                    rawDate,
+                    tipo: 'entrega',
+                    titulo,
+                    tempo: formatRelativeTime(rawDate),
+                    icon: Truck,
+                    iconColor: status === 'Entregue'
+                        ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400'
+                        : 'text-blue-600 bg-blue-50 dark:bg-blue-950/40 dark:text-blue-400'
+                });
+            });
+
+        // 3. Solicitações de Preço reais
+        solicitacoesPreco
+            .filter(s => lojaAtiva === 'todas' || s.loja === lojaAtiva)
+            .slice(0, 5)
+            .forEach(s => {
+                const rawDate = s.data_resposta || s.data_solicitacao || s.created_at;
+                if (!rawDate) return;
+                const timestamp = new Date(rawDate).getTime();
+                if (isNaN(timestamp)) return;
+
+                let titulo = `Solicitação de desconto para ${s.produto_nome || 'Produto'}`;
+                if (s.status === 'aprovado') titulo = `Desconto aprovado para ${s.produto_nome || 'Produto'}`;
+                else if (s.status === 'rejeitado') titulo = `Desconto recusado para ${s.produto_nome || 'Produto'}`;
+
+                feed.push({
+                    id: `solic-${s.id}`,
+                    timestamp,
+                    rawDate,
+                    tipo: 'preco',
+                    titulo,
+                    tempo: formatRelativeTime(rawDate),
+                    icon: DollarSign,
+                    iconColor: s.status === 'aprovado'
+                        ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 dark:text-emerald-400'
+                        : s.status === 'rejeitado'
+                            ? 'text-red-600 bg-red-50 dark:bg-red-950/40 dark:text-red-400'
+                            : 'text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-400'
+                });
+            });
+
+        // 4. Assistências Técnicas reais
+        assistencias
+            .filter(a => lojaAtiva === 'todas' || a.loja === lojaAtiva)
+            .slice(0, 5)
+            .forEach(a => {
+                const rawDate = a.created_at || a.data_abertura || a.data_chamado;
+                if (!rawDate) return;
+                const timestamp = new Date(rawDate).getTime();
+                if (isNaN(timestamp)) return;
+
+                const protocolo = a.numero_protocolo ? `#${a.numero_protocolo}` : (a.numero_pedido ? `do Pedido #${a.numero_pedido}` : '');
+                const status = a.status || 'Aberta';
+
+                feed.push({
+                    id: `assist-${a.id}`,
+                    timestamp,
+                    rawDate,
+                    tipo: 'assistencia',
+                    titulo: `Assistência ${protocolo} (${status})`,
+                    tempo: formatRelativeTime(rawDate),
+                    icon: RotateCcw,
+                    iconColor: 'text-purple-600 bg-purple-50 dark:bg-purple-950/40 dark:text-purple-400'
+                });
+            });
+
+        // 5. Alertas de Estoque Baixo reais
+        const prodBaixo = produtos.find(p => (p.quantidade_estoque || 0) <= (p.estoque_minimo || 2) && (p.quantidade_estoque || 0) > 0 && (lojaAtiva === 'todas' || !p.loja || p.loja === lojaAtiva));
+        if (prodBaixo) {
+            const rawDate = prodBaixo.updated_at || prodBaixo.created_at || new Date().toISOString();
+            feed.push({
+                id: `estoque-${prodBaixo.id}`,
+                timestamp: new Date(rawDate).getTime() || Date.now(),
+                rawDate,
+                tipo: 'alerta',
+                titulo: `Estoque baixo: ${prodBaixo.nome} (${prodBaixo.quantidade_estoque} un)`,
+                tempo: formatRelativeTime(rawDate),
+                icon: AlertTriangle,
+                iconColor: 'text-amber-600 bg-amber-50 dark:bg-amber-950/40 dark:text-amber-400'
+            });
+        }
+
+        // Ordenar por timestamp decrescente e retornar os mais recentes
+        return feed
+            .filter(item => !isNaN(item.timestamp))
+            .sort((a, b) => b.timestamp - a.timestamp)
+            .slice(0, 5);
+    }, [vendas, entregas, solicitacoesPreco, assistencias, produtos, users, lojaAtiva]);
+
+
 
     const loading = loadingVendas || loadingEntregas || loadingMontagens;
 
@@ -1959,1953 +2591,643 @@ export default function DashboardGerente() {
     }
 
     return (
-        <div className="container mx-auto p-6 space-y-6">
-            {/* Header */}
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div>
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                        <Target className="w-7 h-7 text-green-600" />
-                        Dashboard Gerencial
-                    </h1>
-                    <p className="text-gray-500 dark:text-gray-400 mt-1">
-                        Visão operacional da loja em tempo real
-                    </p>
+        <div className="space-y-6 pb-12">
+            {/* ================================================================= */}
+            {/* 5 CARDS DE KPIS PRINCIPAIS (SUPERIORES)                           */}
+            {/* ================================================================= */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                {/* 1. Vendas (Mês) */}
+                <div className="bg-white dark:bg-neutral-900 p-4 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-[#189851]/10 flex items-center justify-center text-[#189851] shrink-0">
+                        <ShoppingCart className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">Vendas (Mês)</p>
+                        <p className="text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate mt-0.5">
+                            {formatarMoeda(kpisSuperiores.totalVendasMes)}
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-semibold mt-0.5">
+                            <TrendingUp className="w-3 h-3" />
+                            <span>{kpisSuperiores.varVendas >= 0 ? `+${kpisSuperiores.varVendas.toFixed(1)}%` : `${kpisSuperiores.varVendas.toFixed(1)}%`} vs mês anterior</span>
+                        </div>
+                    </div>
                 </div>
-                <div className="flex items-center gap-3">
-                    <Select value={periodo} onValueChange={setPeriodo}>
-                        <SelectTrigger className="w-[140px]">
-                            <Calendar className="w-4 h-4 mr-2" />
-                            <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                            <SelectItem value="hoje">Hoje</SelectItem>
-                            <SelectItem value="semana">Esta Semana</SelectItem>
-                            <SelectItem value="mes">Este Mês</SelectItem>
-                        </SelectContent>
-                    </Select>
 
-                    {isGerenteGeral && lojas.length > 1 && (
-                        <Select value={lojaFiltro} onValueChange={setLojaFiltro}>
-                            <SelectTrigger className="w-[160px]">
-                                <Store className="w-4 h-4 mr-2" />
-                                <SelectValue placeholder="Todas Lojas" />
+                {/* 2. Pedidos (Mês) */}
+                <div className="bg-white dark:bg-neutral-900 p-4 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-[#189851]/10 flex items-center justify-center text-[#189851] shrink-0">
+                        <ShoppingBag className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">Pedidos (Mês)</p>
+                        <p className="text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate mt-0.5">
+                            {kpisSuperiores.qtdPedidosMes}
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-semibold mt-0.5">
+                            <TrendingUp className="w-3 h-3" />
+                            <span>{kpisSuperiores.varPedidos >= 0 ? `+${kpisSuperiores.varPedidos.toFixed(1)}%` : `${kpisSuperiores.varPedidos.toFixed(1)}%`} vs mês anterior</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 3. Ticket Médio */}
+                <div className="bg-white dark:bg-neutral-900 p-4 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-[#189851]/10 flex items-center justify-center text-[#189851] shrink-0">
+                        <Box className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">Ticket Médio</p>
+                        <p className="text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate mt-0.5">
+                            {formatarMoeda(kpisSuperiores.ticketMedioMes)}
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-semibold mt-0.5">
+                            <TrendingUp className="w-3 h-3" />
+                            <span>{kpisSuperiores.varTicket >= 0 ? `+${kpisSuperiores.varTicket.toFixed(1)}%` : `${kpisSuperiores.varTicket.toFixed(1)}%`} vs mês anterior</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 4. Recebimentos (Mês) */}
+                <div className="bg-white dark:bg-neutral-900 p-4 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex items-center gap-3.5">
+                    <div className="w-11 h-11 rounded-2xl bg-[#189851]/10 flex items-center justify-center text-[#189851] shrink-0">
+                        <DollarSign className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">Recebimentos (Mês)</p>
+                        <p className="text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate mt-0.5">
+                            {formatarMoeda(kpisSuperiores.totalRecebimentos)}
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-emerald-600 font-semibold mt-0.5">
+                            <TrendingUp className="w-3 h-3" />
+                            <span>{kpisSuperiores.varRecebimentos >= 0 ? `+${kpisSuperiores.varRecebimentos.toFixed(1)}%` : `${kpisSuperiores.varRecebimentos.toFixed(1)}%`} vs mês anterior</span>
+                        </div>
+                    </div>
+                </div>
+
+                {/* 5. Pendências */}
+                <div
+                    onClick={() => setPendenciasModalOpen(true)}
+                    className="bg-white dark:bg-neutral-900 p-4 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex items-center gap-3.5 cursor-pointer hover:border-orange-200 transition-colors"
+                >
+                    <div className="w-11 h-11 rounded-2xl bg-orange-500/10 flex items-center justify-center text-orange-600 shrink-0">
+                        <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400 truncate">Pendências</p>
+                        <p className="text-lg font-bold text-slate-900 dark:text-white tracking-tight truncate mt-0.5">
+                            {kpisSuperiores.totalPendencias}
+                        </p>
+                        <div className="flex items-center gap-1 text-[10px] text-orange-600 font-semibold mt-0.5">
+                            <TrendingDown className="w-3 h-3" />
+                            <span>Clique para verificar</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ================================================================= */}
+            {/* LINHA 1: VENDAS 6M, PEDIDOS POR STATUS, ENTREGAS DE HOJE          */}
+            {/* ================================================================= */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* 1. Vendas nos últimos 6 meses */}
+                <div className="lg:col-span-6 bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Vendas nos últimos 6 meses
+                        </h3>
+                        <Select value={filtroVendas6M} onValueChange={setFiltroVendas6M}>
+                            <SelectTrigger className="h-7 text-[11px] px-2.5 rounded-lg border-slate-200 bg-slate-50 dark:bg-neutral-800 w-32">
+                                <SelectValue />
                             </SelectTrigger>
                             <SelectContent>
-                                <SelectItem value="todas">Todas Lojas</SelectItem>
-                                {lojas.map(loja => (
-                                    <SelectItem key={loja} value={loja}>{loja}</SelectItem>
-                                ))}
+                                <SelectItem value="6m">Últimos 6 meses</SelectItem>
+                                <SelectItem value="12m">Últimos 12 meses</SelectItem>
                             </SelectContent>
                         </Select>
-                    )}
-
-                    <Button variant="outline" size="icon" onClick={() => refetchVendas()} disabled={loading}>
-                        <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-                    </Button>
-                </div>
-            </div>
-
-            {/* KPIs Principais */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Vendas do Dia */}
-                <Card className="relative overflow-hidden border-l-4 border-l-green-500">
-                    <CardContent className="p-6">
-                        <div className="flex items-start justify-between">
-                            <div>
-                                <p className="text-sm text-gray-500 dark:text-gray-400">Vendas de Hoje</p>
-                                <p className="text-2xl font-bold mt-1">{formatarMoeda(kpis.totalHoje)}</p>
-                                <p className="text-xs text-gray-400 mt-1">{kpis.qtdHoje} vendas realizadas</p>
-                            </div>
-                            <div className="p-3 rounded-xl bg-green-100 dark:bg-green-900/30">
-                                <DollarSign className="w-6 h-6 text-green-600" />
-                            </div>
-                        </div>
-                        {kpis.variacaoHoje !== 0 && (
-                            <div className={`flex items-center gap-1 mt-3 text-sm ${kpis.variacaoHoje >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                                {kpis.variacaoHoje >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                                <span>{Math.abs(kpis.variacaoHoje).toFixed(1)}% vs semana passada</span>
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Vendas do Mês + Meta */}
-                <Card className="relative overflow-hidden border-l-4 border-l-blue-500">
-                    <CardContent className="p-6">
-                        <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                                <p className="text-sm text-gray-500 dark:text-gray-400">Vendas do Mês</p>
-                                <p className="text-2xl font-bold mt-1">{formatarMoeda(kpis.totalMes)}</p>
-                                {kpis.metaValor > 0 ? (
-                                    <div className="mt-2">
-                                        <div className="flex justify-between text-xs text-gray-500 mb-1">
-                                            <span>{kpis.progressoMeta.toFixed(0)}% da meta</span>
-                                            <span>{formatarMoeda(kpis.metaValor)}</span>
-                                        </div>
-                                        <Progress value={Math.min(kpis.progressoMeta, 100)} className="h-2" />
-                                        <p className="text-xs text-gray-400 mt-1">{kpis.diasRestantes} dias restantes</p>
-                                    </div>
-                                ) : (
-                                    <p className="text-xs text-orange-500 mt-2">Meta não definida</p>
-                                )}
-                            </div>
-                            <div className="p-3 rounded-xl bg-blue-100 dark:bg-blue-900/30">
-                                <Target className="w-6 h-6 text-blue-600" />
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Ticket Médio */}
-                <Card className="relative overflow-hidden border-l-4 border-l-purple-500">
-                    <CardContent className="p-6">
-                        <div className="flex items-start justify-between">
-                            <div>
-                                <p className="text-sm text-gray-500 dark:text-gray-400">Ticket Médio</p>
-                                <p className="text-2xl font-bold mt-1">{formatarMoeda(kpis.ticketMedio)}</p>
-                                <p className="text-xs text-gray-400 mt-1">{kpis.qtdMes} vendas no mês</p>
-                            </div>
-                            <div className="p-3 rounded-xl bg-purple-100 dark:bg-purple-900/30">
-                                <ShoppingCart className="w-6 h-6 text-purple-600" />
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Pendências */}
-                {/* Pendências */}
-                <Card
-                    className={`relative overflow-hidden border-l-4 cursor-pointer transition-shadow hover:shadow-md ${pendencias.total > 0 ? 'border-l-orange-500' : 'border-l-emerald-500'}`}
-                    onClick={() => setPendenciasModalOpen(true)}
-                >
-                    <CardContent className="p-6">
-                        <div className="flex items-start justify-between">
-                            <div>
-                                <p className="text-sm text-gray-500 dark:text-gray-400">Pendências</p>
-                                <p className="text-2xl font-bold mt-1">{pendencias.total}</p>
-                                <div className="flex flex-wrap gap-1 mt-2">
-                                    {pendencias.entregas.length > 0 && (
-                                        <Badge variant="outline" className="text-xs">
-                                            <Truck className="w-3 h-3 mr-1" />{pendencias.entregas.length}
-                                        </Badge>
-                                    )}
-                                    {pendencias.montagens.length > 0 && (
-                                        <Badge variant="outline" className="text-xs">
-                                            <Wrench className="w-3 h-3 mr-1" />{pendencias.montagens.length}
-                                        </Badge>
-                                    )}
-                                    {pendencias.pagamentos.length > 0 && (
-                                        <Badge variant="outline" className="text-xs">
-                                            <CreditCard className="w-3 h-3 mr-1" />{pendencias.pagamentos.length}
-                                        </Badge>
-                                    )}
-                                    {pendencias.triagem.length > 0 && (
-                                        <Badge variant="outline" className="text-xs">
-                                            <ClipboardList className="w-3 h-3 mr-1" />{pendencias.triagem.length}
-                                        </Badge>
-                                    )}
-                                </div>
-                            </div>
-                            <div className={`p-3 rounded-xl ${pendencias.total > 0 ? 'bg-orange-100 dark:bg-orange-900/30' : 'bg-emerald-100 dark:bg-emerald-900/30'}`}>
-                                <AlertTriangle className={`w-6 h-6 ${pendencias.total > 0 ? 'text-orange-600' : 'text-emerald-600'}`} />
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            {/* Fluxo Operacional */}
-            <div className="mt-8 mb-3">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Fluxo Operacional</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                    Acompanhe pedidos, entregas e pagamentos em uma sequência única de operação.
-                </p>
-            </div>
-
-            {/* Tabs de Navegação do Dashboard - Estilo "Caixinha" Centralizado */}
-            <div className="mb-6 flex justify-center">
-                <Tabs value={abaDashboard} onValueChange={setAbaDashboard} className="w-full max-w-4xl">
-                    <div className="flex justify-center mb-6">
-                        <TabsList className="bg-gray-100 dark:bg-gray-800 p-1.5 rounded-full inline-flex items-center justify-center h-auto shadow-inner">
-                            <TabsTrigger
-                                value="visao-geral"
-                                className="gap-2 px-6 py-2.5 rounded-full text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-indigo-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-gray-700 dark:data-[state=active]:text-indigo-400"
-                            >
-                                <BarChart3 className="w-4 h-4" />
-                                Visão Geral
-                            </TabsTrigger>
-                            <TabsTrigger
-                                value="pesquisa-pedido"
-                                className="gap-2 px-6 py-2.5 rounded-full text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-indigo-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-gray-700 dark:data-[state=active]:text-indigo-400"
-                            >
-                                <Search className="w-4 h-4" />
-                                Pedidos
-                            </TabsTrigger>
-                            <TabsTrigger
-                                value="entregas"
-                                className="gap-2 px-6 py-2.5 rounded-full text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-indigo-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-gray-700 dark:data-[state=active]:text-indigo-400"
-                            >
-                                <Truck className="w-4 h-4" />
-                                Entregas
-                                {statusEntregas.atrasadas.length > 0 && (
-                                    <Badge className="bg-red-500 text-white ml-2 h-5 w-5 p-0 text-xs flex items-center justify-center rounded-full">
-                                        {statusEntregas.atrasadas.length}
-                                    </Badge>
-                                )}
-                            </TabsTrigger>
-                            <TabsTrigger
-                                value="pagamentos"
-                                className="gap-2 px-6 py-2.5 rounded-full text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-orange-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-gray-700 dark:data-[state=active]:text-orange-400"
-                            >
-                                <CreditCard className="w-4 h-4" />
-                                Pagamentos
-                                {pendencias.pagamentos.length > 0 && (
-                                    <Badge className="bg-orange-500 text-white ml-2 h-5 w-5 p-0 text-xs flex items-center justify-center rounded-full">
-                                        {pendencias.pagamentos.length}
-                                    </Badge>
-                                )}
-                            </TabsTrigger>
-                            {conferenciaCaixaEnabled && (
-                                <TabsTrigger
-                                    value="conferencia-caixa"
-                                    className="gap-2 px-6 py-2.5 rounded-full text-sm font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-amber-600 data-[state=active]:shadow-sm dark:data-[state=active]:bg-gray-700 dark:data-[state=active]:text-amber-400"
-                                >
-                                    <ShieldCheck className="w-4 h-4" />
-                                    Conferência
-                                </TabsTrigger>
-                            )}
-                        </TabsList>
                     </div>
 
-                    {/* Tab: Visão Geral - Placeholder para conteúdo existente */}
-                    <TabsContent value="visao-geral" className="p-0 m-0">
-                        <div className="text-center text-gray-500 text-sm py-2 mb-4 animate-in fade-in slide-in-from-top-4 duration-500">
-                            <p>Visão completa em tempo real</p>
+                    <div className="h-[210px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <AreaChart data={chartVendas6Meses} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                <defs>
+                                    <linearGradient id="vendas6mGrad" x1="0" y1="0" x2="0" y2="1">
+                                        <stop offset="5%" stopColor="#189851" stopOpacity={0.25} />
+                                        <stop offset="95%" stopColor="#189851" stopOpacity={0.0} />
+                                    </linearGradient>
+                                </defs>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="mes" tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 11, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <Tooltip content={({ active, payload, label }) => {
+                                    if (!active || !payload?.length) return null;
+                                    return (
+                                        <div className="bg-slate-900 text-white text-xs p-2.5 rounded-xl shadow-lg border border-slate-800 space-y-1">
+                                            <p className="font-semibold text-slate-200">{label}</p>
+                                            <p className="font-bold text-emerald-400">{formatarMoeda(payload[0].value)}</p>
+                                        </div>
+                                    );
+                                }} />
+                                <Area
+                                    type="monotone"
+                                    dataKey="vendas"
+                                    stroke="#189851"
+                                    strokeWidth={2.5}
+                                    fillOpacity={1}
+                                    fill="url(#vendas6mGrad)"
+                                    dot={{ r: 4, fill: '#189851', stroke: '#fff', strokeWidth: 2 }}
+                                    activeDot={{ r: 6, fill: '#189851' }}
+                                />
+                            </AreaChart>
+                        </ResponsiveContainer>
+                    </div>
+
+                    <div className="flex items-center justify-center gap-2 pt-2 border-t border-slate-50 dark:border-neutral-800 text-[11px] text-slate-500">
+                        <div className="w-2.5 h-2.5 rounded-full bg-[#189851]" />
+                        <span>Vendas (R$)</span>
+                    </div>
+                </div>
+
+                {/* 2. Pedidos por status (Donut) */}
+                <div className="lg:col-span-3 bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Pedidos por status
+                        </h3>
+                    </div>
+
+                    <div className="relative w-full h-[180px] flex items-center justify-center">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <PieChart>
+                                <Pie
+                                    data={donutPedidosStatus.data}
+                                    innerRadius={45}
+                                    outerRadius={70}
+                                    paddingAngle={3}
+                                    dataKey="value"
+                                >
+                                    {donutPedidosStatus.data.map((entry, index) => (
+                                        <Cell key={`cell-${index}`} fill={entry.color} />
+                                    ))}
+                                </Pie>
+                                <Tooltip formatter={(value, name) => [`${value} pedidos`, name]} />
+                            </PieChart>
+                        </ResponsiveContainer>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                            <span className="text-[10px] text-slate-400 font-medium uppercase">Total</span>
+                            <span className="text-xl font-bold text-slate-800 dark:text-white leading-tight">{donutPedidosStatus.totalGeral}</span>
                         </div>
-                    </TabsContent>
+                    </div>
 
-                    {/* Tab: Conferência de Caixa */}
-                    {conferenciaCaixaEnabled && (
-                        <TabsContent value="conferencia-caixa" className="m-0">
-                            <PainelConferenciaCaixa />
-                        </TabsContent>
-                    )}
-
-                    {/* Tab: Pesquisa de Pedido */}
-                    <TabsContent value="pesquisa-pedido" className="m-0">
-                        <Card className="border-0 shadow-sm bg-white dark:bg-gray-900">
-                            <CardContent className="p-6">
-                                <div className="space-y-6">
-                                    <div className="flex items-center gap-4">
-                                        <div className="relative flex-1">
-                                            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                            <Input
-                                                placeholder="Buscar por número do pedido, nome do cliente ou vendedor..."
-                                                value={buscaPedido}
-                                                onChange={(e) => setBuscaPedido(e.target.value)}
-                                                className="pl-9 bg-gray-50 border-gray-200"
-                                            />
-                                        </div>
-                                        <Button variant="outline" className="gap-2">
-                                            <Filter className="w-4 h-4" />
-                                            Filtros
-                                        </Button>
-                                    </div>
-
-                                    {buscaPedido && (
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            {pedidosPesquisados.map(pedido => {
-                                                const entregaAssociada = entregas.find(e => e.venda_id === pedido.id);
-                                                return (
-                                                    <Card key={pedido.id} className="hover:shadow-md transition-shadow border-gray-100 dark:border-gray-800">
-                                                        <CardContent className="p-4">
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="flex-1">
-                                                                    <div className="flex items-center gap-3">
-                                                                        <span className="font-bold text-blue-600">
-                                                                            #{pedido.numero_pedido || pedido.id}
-                                                                        </span>
-                                                                        <Badge variant="outline" className={
-                                                                            pedido.status === 'Finalizada' ? 'bg-green-100 text-green-700' :
-                                                                                pedido.status === 'Pendente' ? 'bg-yellow-100 text-yellow-700' :
-                                                                                    'bg-gray-100 text-gray-700'
-                                                                        }>
-                                                                            {pedido.status}
-                                                                        </Badge>
-                                                                        {(pedido.valor_restante || 0) > 0 && (
-                                                                            <Badge className="bg-orange-100 text-orange-700">
-                                                                                <CreditCard className="w-3 h-3 mr-1" />
-                                                                                Pendente: {formatarMoeda(pedido.valor_restante)}
-                                                                            </Badge>
-                                                                        )}
-                                                                    </div>
-                                                                    <p className="text-gray-700 dark:text-gray-300 mt-1">
-                                                                        {pedido.cliente_nome || 'Cliente não informado'}
-                                                                    </p>
-                                                                    <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-                                                                        <span className="flex items-center gap-1">
-                                                                            <Calendar className="w-3 h-3" />
-                                                                            {pedido.data_venda ? parseDateSafe(pedido.data_venda).toLocaleDateString('pt-BR') : '-'}
-                                                                        </span>
-                                                                        <span>{formatarMoeda(pedido.valor_total || 0)}</span>
-                                                                        {entregaAssociada && (
-                                                                            <span className="flex items-center gap-1">
-                                                                                <Truck className="w-3 h-3" />
-                                                                                Entrega: {entregaAssociada.status}
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                                <Eye className="w-5 h-5 text-gray-400" />
-                                                            </div>
-                                                        </CardContent>
-                                                    </Card>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-
-                                    {!buscaPedido && (
-                                        <div className="text-center py-12 text-gray-500 bg-gray-50/50 rounded-lg border border-dashed border-gray-200">
-                                            <Search className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                                            <p className="font-medium">Digite para buscar pedidos</p>
-                                            <p className="text-xs mt-1 text-gray-400">Busque por número, cliente ou vendedor</p>
-                                        </div>
-                                    )}
+                    {/* Legenda compacta */}
+                    <div className="space-y-1.5 pt-2 border-t border-slate-50 dark:border-neutral-800 text-[11px]">
+                        {donutPedidosStatus.data.map((item, idx) => (
+                            <div key={idx} className="flex items-center justify-between gap-1">
+                                <div className="flex items-center gap-1.5 truncate">
+                                    <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+                                    <span className="text-slate-600 dark:text-slate-400 truncate text-[11px]">{item.name}</span>
                                 </div>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
+                                <span className="text-slate-900 dark:text-slate-200 font-semibold text-[11px] shrink-0">
+                                    {item.value} <span className="text-slate-400 font-normal text-[10px]">({item.pct}%)</span>
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
 
-                    {/* Tab: Entregas */}
-                    <TabsContent value="entregas" className="m-0">
-                        <Card className="border-0 shadow-sm bg-white dark:bg-gray-900">
-                            <CardContent className="p-6">
-                                <div className="space-y-6">
-                                    <div className="flex items-center gap-4">
-                                        <div className="relative flex-1">
-                                            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
-                                            <Input
-                                                placeholder="Filtrar entregas por cliente, endereço ou pedido..."
-                                                value={buscaEntrega}
-                                                onChange={(e) => setBuscaEntrega(e.target.value)}
-                                                className="pl-9 bg-gray-50 border-gray-200"
-                                            />
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <Badge className="bg-yellow-100 text-yellow-700 px-3 py-1">
-                                                Pendentes: {statusEntregas.pendentes.length}
-                                            </Badge>
-                                            <Badge className="bg-blue-100 text-blue-700 px-3 py-1">
-                                                Em Rota: {statusEntregas.emRota.length}
-                                            </Badge>
-                                            <Badge className="bg-red-100 text-red-700 px-3 py-1">
-                                                Atrasadas: {statusEntregas.atrasadas.length}
-                                            </Badge>
-                                        </div>
-                                    </div>
+                {/* 3. Entregas de hoje */}
+                <div className="lg:col-span-3 bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Entregas de hoje
+                        </h3>
+                        <Link to="/admin/LogisticaSemanal" className="text-[11px] text-emerald-600 hover:text-emerald-700 font-medium">
+                            Ver todas
+                        </Link>
+                    </div>
 
-                                    {entregasPesquisadas.length === 0 ? (
-                                        <div className="text-center py-12 text-gray-500 bg-gray-50/50 rounded-lg border border-dashed border-gray-200">
-                                            <Truck className="w-12 h-12 mx-auto mb-3 opacity-20" />
-                                            <p className="font-medium">Nenhuma entrega encontrada</p>
+                    <div className="space-y-2.5 flex-1 overflow-y-auto max-h-[220px] pr-1">
+                        {entregasHojeWidget.length === 0 ? (
+                            <div className="text-center py-8 text-slate-400 text-xs">
+                                Nenhuma entrega agendada para hoje
+                            </div>
+                        ) : (
+                            entregasHojeWidget.map((entrega) => (
+                                <div key={entrega.id} className="p-2.5 rounded-xl border border-slate-100 dark:border-neutral-800 bg-slate-50/50 dark:bg-neutral-800/40 flex items-start justify-between gap-2">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex items-center gap-1.5 flex-wrap">
+                                            <span className="text-[10px] text-slate-500 font-medium">{entrega.horario}</span>
+                                            <span className={`text-[9px] px-1.5 py-0.5 rounded-md font-semibold ${
+                                                entrega.status === 'Em andamento' || entrega.status === 'Em Rota'
+                                                    ? 'bg-emerald-100 text-emerald-700'
+                                                    : 'bg-amber-100 text-amber-700'
+                                            }`}>
+                                                {entrega.status}
+                                            </span>
                                         </div>
-                                    ) : (
-                                        <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                                            {entregasPesquisadas.map(entrega => {
-                                                const vendaAssociada = vendas.find(v => v.id === entrega.venda_id);
-                                                const isAtrasada = statusEntregas.atrasadas.some(e => e.id === entrega.id);
-                                                const isEmRota = statusEntregas.emRota.some(e => e.id === entrega.id);
-
-                                                return (
-                                                    <Card key={entrega.id} className={`border ${isAtrasada ? 'border-red-200 bg-red-50/30' : isEmRota ? 'border-blue-200 bg-blue-50/30' : 'border-gray-100 hover:bg-gray-50'} transition-all`}>
-                                                        <CardContent className="p-4">
-                                                            <div className="flex items-center justify-between">
-                                                                <div className="flex-1">
-                                                                    <div className="flex items-center gap-2">
-                                                                        <span className="font-medium text-gray-900">
-                                                                            #{vendaAssociada?.numero_pedido || entrega.venda_id}
-                                                                        </span>
-                                                                        <Badge className={
-                                                                            isAtrasada ? 'bg-red-100 text-red-700 hover:bg-red-100' :
-                                                                                isEmRota ? 'bg-blue-100 text-blue-700 hover:bg-blue-100' :
-                                                                                    'bg-yellow-100 text-yellow-700 hover:bg-yellow-100'
-                                                                        }>
-                                                                            {isAtrasada ? 'Atrasada' : isEmRota ? 'Em Rota' : entrega.status}
-                                                                        </Badge>
-                                                                    </div>
-                                                                    <p className="text-sm font-medium text-gray-700 mt-1">
-                                                                        {vendaAssociada?.cliente_nome || entrega.cliente_nome || 'Cliente'}
-                                                                    </p>
-                                                                    <div className="flex items-center gap-2 mt-1 min-w-0">
-                                                                        <div className="h-1.5 w-1.5 rounded-full bg-gray-300"></div>
-                                                                        <p className="text-xs text-gray-500 truncate max-w-md">
-                                                                            {entrega.endereco || entrega.endereco_entrega || 'Endereço não informado'}
-                                                                        </p>
-                                                                    </div>
-                                                                </div>
-                                                                <div className="text-right text-sm pl-4 border-l border-gray-100 ml-4">
-                                                                    <p className="font-medium text-gray-900">
-                                                                        {entrega.data_agendada ? parseDateSafe(entrega.data_agendada).toLocaleDateString('pt-BR') : '-'}
-                                                                    </p>
-                                                                    <p className="text-xs text-gray-500 capitalize">{entrega.turno || ''}</p>
-                                                                </div>
-                                                            </div>
-                                                        </CardContent>
-                                                    </Card>
-                                                );
-                                            })}
-                                        </div>
-                                    )}
-                                </div>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
-
-                    {/* Tab: Pagamentos em Aberto */}
-                    <TabsContent value="pagamentos" className="m-0">
-                        <Card className="border-0 shadow-sm bg-white dark:bg-gray-900">
-                            <CardContent className="p-6">
-                                <div className="space-y-6">
-                                    <div className="flex items-center justify-between border-b border-gray-100 pb-4">
-                                        <div>
-                                            <h3 className="font-semibold text-lg text-gray-900">Pagamentos em Aberto</h3>
-                                            <p className="text-sm text-gray-500">Pedidos com saldo pendente</p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-sm text-gray-500">Total em Aberto</p>
-                                            <p className="text-2xl font-bold text-orange-600">
-                                                {formatarMoeda(pendencias.pagamentos.reduce((sum, p) => sum + (p.valor_restante || 0), 0))}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    {pendencias.pagamentos.length === 0 ? (
-                                        <div className="text-center py-12 text-green-600 bg-green-50/50 rounded-lg border border-dashed border-green-200">
-                                            <Check className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                                            <p className="font-medium">Nenhum pagamento pendente!</p>
-                                            <p className="text-sm">Todos os pedidos estão quitados</p>
-                                        </div>
-                                    ) : (
-                                        <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                                            {pendencias.pagamentos.map(pedido => (
-                                                <Card key={pedido.id} className="border border-orange-200 bg-orange-50/30 hover:bg-orange-50/50 transition-colors">
-                                                    <CardContent className="p-4">
-                                                        <div className="flex items-center justify-between">
-                                                            <div className="flex-1">
-                                                                <div className="flex items-center gap-2">
-                                                                    <span className="font-bold text-orange-900">#{pedido.numero_pedido || pedido.id}</span>
-                                                                    <Badge variant="outline" className="bg-white/50">{pedido.status}</Badge>
-                                                                </div>
-                                                                <p className="text-gray-800 mt-1 font-medium">{pedido.cliente_nome || 'Cliente'}</p>
-                                                                <p className="text-xs text-gray-600 mt-1">
-                                                                    {pedido.data_venda ? parseDateSafe(pedido.data_venda).toLocaleDateString('pt-BR') : '-'}
-                                                                    {' • '}Vendedor: {pedido.responsavel_nome || pedido.vendedor_nome || '-'}
-                                                                </p>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <p className="text-sm text-gray-500">Valor Total</p>
-                                                                <p className="font-medium">{formatarMoeda(pedido.valor_total || 0)}</p>
-                                                                <div className="mt-1 bg-white/80 px-2 py-1 rounded border border-orange-100 inline-block">
-                                                                    <p className="text-orange-600 font-bold text-sm">
-                                                                        Restante: {formatarMoeda(pedido.valor_restante || 0)}
-                                                                    </p>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    </CardContent>
-                                                </Card>
-                                            ))}
-                                        </div>
-                                    )}
-                                </div>
-                            </CardContent>
-                        </Card>
-                    </TabsContent>
-                </Tabs>
-            </div>
-
-            {/* Gráfico + Ranking */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Gráfico de Evolução + Comparativos */}
-                <Card className="lg:col-span-3">
-                    <CardHeader className="flex flex-row items-center justify-between border-b border-gray-100 dark:border-gray-800 pb-4">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <TrendingUp className="w-5 h-5 text-indigo-600" />
-                            Análise de Desempenho
-                        </CardTitle>
-                        <Dialog open={metaModalOpen} onOpenChange={(open) => {
-                            setMetaModalOpen(open);
-                            if (!open) {
-                                setMetaVendedorSelecionado(null);
-                                setNovaMetaValor('');
-                            }
-                        }}>
-                            <DialogTrigger asChild>
-                                <Button variant="outline" size="sm" onClick={() => {
-                                    setEditingMeta(null);
-                                    setMetaVendedorSelecionado(null);
-                                    setNovaMetaValor(kpis.metaValor.toString());
-                                }}>
-                                    <Settings className="w-4 h-4 mr-2" />
-                                    Definir Metas
-                                </Button>
-                            </DialogTrigger>
-                            <DialogContent className="max-w-md">
-                                <DialogHeader>
-                                    <DialogTitle>Definir Meta do Mês</DialogTitle>
-                                </DialogHeader>
-                                <div className="space-y-4 py-4">
-                                    <div>
-                                        <Label>Loja</Label>
-                                        <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                                            {lojaAtiva === 'todas' ? lojas[0] || 'Principal' : lojaAtiva}
+                                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate mt-1">
+                                            {entrega.clienteNome}
+                                        </p>
+                                        <p className="text-[10px] text-slate-400 truncate">
+                                            {entrega.endereco}
+                                        </p>
+                                        <p className="text-[10px] text-slate-500 font-medium mt-0.5">
+                                            Nº Pedido: #{entrega.numeroPedido}
                                         </p>
                                     </div>
-                                    <div>
-                                        <Label>Vendedor</Label>
-                                        <Select
-                                            value={metaVendedorSelecionado?.id || ''}
-                                            onValueChange={(value) => {
-                                                const vendedor = vendedoresLoja.find(v => v.id === value);
-                                                setMetaVendedorSelecionado(vendedor);
-                                                // Buscar meta do vendedor
-                                                const hoje = new Date();
-                                                const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-01`;
-                                                const metaVendedor = metas.find(m => m.mes === mesAtual && m.vendedor_id === value);
-                                                setNovaMetaValor(metaVendedor?.meta_valor?.toString() || '');
-                                            }}
+                                    <div className="flex flex-col gap-1.5 shrink-0 pt-1">
+                                        <a
+                                            href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(entrega.endereco)}`}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
+                                            title="Abrir no Mapa"
                                         >
-                                            <SelectTrigger className="mt-1">
-                                                <SelectValue placeholder="Selecione um vendedor..." />
-                                            </SelectTrigger>
-                                            <SelectContent>
-                                                {vendedoresLoja.map(vendedor => (
-                                                    <SelectItem key={vendedor.id} value={vendedor.id}>
-                                                        <div className="flex items-center gap-2">
-                                                            <Users className="w-4 h-4" />
-                                                            {vendedor.nome}
-                                                        </div>
-                                                    </SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-                                    <div>
-                                        <Label htmlFor="meta-valor">Valor da Meta (R$)</Label>
-                                        <Input
-                                            id="meta-valor"
-                                            type="text"
-                                            value={novaMetaValor}
-                                            onChange={(e) => {
-                                                const raw = e.target.value.replace(/\D/g, '');
-                                                const formatted = raw.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
-                                                setNovaMetaValor(formatted);
-                                            }}
-                                            placeholder="Ex: 150.000"
-                                            className="mt-1"
-                                        />
-                                        {novaMetaValor && (
-                                            <p className="text-xs text-gray-500 mt-1">
-                                                Meta diária: {formatarMoeda(parseFloat(novaMetaValor.replace(/\./g, '')) / new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate())}
-                                            </p>
-                                        )}
-                                    </div>
-                                </div>
-                                <DialogFooter>
-                                    <Button variant="outline" onClick={() => setMetaModalOpen(false)}>
-                                        Cancelar
-                                    </Button>
-                                    <Button onClick={handleSaveMeta} disabled={saveMeta.isPending}>
-                                        {saveMeta.isPending ? (
-                                            <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Salvando...</>
-                                        ) : (
-                                            'Salvar Meta'
-                                        )}
-                                    </Button>
-                                </DialogFooter>
-                            </DialogContent>
-                        </Dialog>
-                    </CardHeader>
-                    <CardContent className="p-6">
-                        {/* Linha 1: Evolução de Vendas (Largura Total) */}
-                        <div className="w-full mb-8">
-                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
-                                <h3 className="text-sm font-medium text-gray-500">Evolução de Vendas</h3>
-                                <div className="flex flex-wrap items-center gap-1 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg">
-                                    {[
-                                        { id: '5', label: '5D' },
-                                        { id: '7', label: '7D' },
-                                        { id: '14', label: '14D' },
-                                        { id: 'mes', label: '30D' },
-                                        { id: '60', label: '60D' },
-                                        { id: '2y', label: '2 ANOS' }
-                                    ].map((p) => (
-                                        <button
-                                            key={p.id}
-                                            onClick={() => setPeriodoGrafico(p.id)}
-                                            className={`px-3 py-1 text-[10px] font-semibold rounded-md transition-all ${periodoGrafico === p.id
-                                                ? 'bg-white dark:bg-gray-700 text-indigo-600 shadow-sm'
-                                                : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'
-                                                }`}
-                                        >
-                                            {p.label}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="h-[300px] w-full">
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <AreaChart data={dadosGrafico}>
-                                        <defs>
-                                            <linearGradient id="colorAcumulado" x1="0" y1="0" x2="0" y2="1">
-                                                <stop offset="5%" stopColor="#4f46e5" stopOpacity={0.8} />
-                                                <stop offset="95%" stopColor="#4f46e5" stopOpacity={0.1} />
-                                            </linearGradient>
-                                        </defs>
-                                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                                        <XAxis
-                                            dataKey="diaFormatado"
-                                            tick={{ fontSize: 11, fill: '#6b7280' }}
-                                            axisLine={false}
-                                            tickLine={false}
-                                            dy={10}
-                                        />
-                                        <YAxis
-                                            tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                                            tick={{ fontSize: 11, fill: '#6b7280' }}
-                                            axisLine={false}
-                                            tickLine={false}
-                                        />
-                                        <Tooltip content={<ChartTooltip assistencias={assistencias} />} />
-                                        {kpis.metaValor > 0 && (
-                                            <ReferenceLine
-                                                y={kpis.metaValor}
-                                                stroke="#ef4444"
-                                                strokeDasharray="5 5"
-                                                label={{ value: 'Meta', position: 'right', fill: '#ef4444', fontSize: 11 }}
-                                            />
-                                        )}
-                                        <Area
-                                            type="monotone"
-                                            dataKey="acumulado"
-                                            stroke="#4f46e5"
-                                            strokeWidth={2}
-                                            fillOpacity={1}
-                                            fill="url(#colorAcumulado)"
-                                            name="Acumulado"
-                                        />
-                                    </AreaChart>
-                                </ResponsiveContainer>
-                            </div>
-                        </div>
-
-                        {/* Linha 2: Comparativos (Gráfico + Cards) */}
-                        <div className="flex flex-col lg:flex-row gap-8 pt-8 border-t border-gray-100 dark:border-gray-800">
-                            {/* Gráficos Comparativos com Toggle */}
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="text-sm font-medium text-gray-500">
-                                        {tipoComparativo === 'mes' ? 'Comparativo: Este Mês vs Mês Anterior' : 'Comparativo: Este Ano vs Ano Anterior'}
-                                    </h3>
-
-                                    <div className="flex items-center gap-4">
-                                        {/* Toggle Mes/Ano */}
-                                        <div className="flex bg-gray-100 p-1 rounded-lg">
-                                            <button
-                                                onClick={() => setTipoComparativo('mes')}
-                                                className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${tipoComparativo === 'mes' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}
+                                            <MapPin className="w-3.5 h-3.5" />
+                                        </a>
+                                        {entrega.telefone && (
+                                            <a
+                                                href={`https://wa.me/55${entrega.telefone.replace(/\D/g, '')}`}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="p-1 rounded-lg hover:bg-slate-200 text-slate-400 hover:text-emerald-600 transition-colors"
+                                                title="WhatsApp"
                                             >
-                                                Mensal
-                                            </button>
-                                            <button
-                                                onClick={() => setTipoComparativo('ano')}
-                                                className={`px-3 py-1 text-xs font-semibold rounded-md transition-all ${tipoComparativo === 'ano' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500 hover:text-gray-700'}`}
-                                            >
-                                                Anual
-                                            </button>
-                                        </div>
-
-                                        {/* Legenda Dinâmica */}
-                                        <div className="flex items-center gap-4 border-l pl-4 border-gray-200">
-                                            <div className="flex items-center gap-2">
-                                                <div className={`w-3 h-3 rounded-full ${tipoComparativo === 'mes' ? 'bg-indigo-600' : 'bg-emerald-600'}`} />
-                                                <span className="text-[10px] font-medium text-gray-500 uppercase">
-                                                    {tipoComparativo === 'mes' ? 'ESTE MÊS' : 'ESTE ANO'}
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <div className="w-3 h-3 rounded-full border-2 border-gray-400 border-dashed" />
-                                                <span className="text-[10px] font-medium text-gray-500 uppercase">
-                                                    {tipoComparativo === 'mes' ? 'MÊS ANTERIOR' : 'ANO ANTERIOR'}
-                                                </span>
-                                            </div>
-                                        </div>
+                                                <Phone className="w-3.5 h-3.5" />
+                                            </a>
+                                        )}
                                     </div>
                                 </div>
-
-                                <div className="h-[200px] w-full">
-                                    {tipoComparativo === 'mes' ? (
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={dadosComparativoMeses}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                                                <XAxis
-                                                    dataKey="dia"
-                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                />
-                                                <YAxis
-                                                    tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                />
-                                                <Tooltip
-                                                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                    formatter={(value) => [formatarMoeda(value), '']}
-                                                    labelFormatter={(label) => `Dia ${label}`}
-                                                />
-                                                <Line
-                                                    type="monotone"
-                                                    dataKey="esteMes"
-                                                    stroke="#4f46e5"
-                                                    strokeWidth={3}
-                                                    dot={{ r: 0 }}
-                                                    activeDot={{ r: 4 }}
-                                                    name="Este Mês"
-                                                />
-                                                <Line
-                                                    type="monotone"
-                                                    dataKey="mesAnterior"
-                                                    stroke="#9ca3af"
-                                                    strokeWidth={2}
-                                                    strokeDasharray="5 5"
-                                                    dot={{ r: 0 }}
-                                                    activeDot={{ r: 4 }}
-                                                    name="Mês Anterior"
-                                                />
-                                            </LineChart>
-                                        </ResponsiveContainer>
-                                    ) : (
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <LineChart data={dadosComparativoAnual}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
-                                                <XAxis
-                                                    dataKey="mes"
-                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                />
-                                                <YAxis
-                                                    tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-                                                    tick={{ fontSize: 10, fill: '#9ca3af' }}
-                                                    axisLine={false}
-                                                    tickLine={false}
-                                                />
-                                                <Tooltip
-                                                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                    formatter={(value) => [formatarMoeda(value), '']}
-                                                    labelFormatter={(label) => `Mês: ${label}`}
-                                                />
-                                                <Line
-                                                    type="monotone"
-                                                    dataKey="esteAno"
-                                                    stroke="#10b981"
-                                                    strokeWidth={3}
-                                                    dot={{ r: 0 }}
-                                                    activeDot={{ r: 4 }}
-                                                    name="Este Ano"
-                                                />
-                                                <Line
-                                                    type="monotone"
-                                                    dataKey="anoAnterior"
-                                                    stroke="#9ca3af"
-                                                    strokeWidth={2}
-                                                    strokeDasharray="5 5"
-                                                    dot={{ r: 0 }}
-                                                    activeDot={{ r: 4 }}
-                                                    name="Ano Anterior"
-                                                />
-                                            </LineChart>
-                                        </ResponsiveContainer>
-                                    )}
-                                </div>
-                            </div>
-
-                            {/* Área de Métricas (Insights Rápidos) */}
-                            <div className="lg:w-1/4 flex flex-col lg:border-l border-gray-100 dark:border-gray-800 lg:pl-6">
-                                <div className="flex items-center justify-between mb-6">
-                                    <h3 className="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
-                                        <TrendingUp className="w-4 h-4 text-emerald-600" />
-                                        Comparativos
-                                    </h3>
-                                    <Badge variant="secondary" className="text-[10px] font-semibold bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">STATUS ATUAL</Badge>
-                                </div>
-
-                                <div className="grid grid-cols-1 gap-4 flex-grow">
-                                    {/* MoM Card */}
-                                    <div className="group relative p-4 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all duration-300">
-                                        <div className="flex items-start justify-between mb-3">
-                                            <div>
-                                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Mês contra Mês</span>
-                                                <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-0.5">MoM Performance</h4>
-                                            </div>
-                                            <Badge variant="outline" className="text-[9px] font-medium border-gray-200 text-gray-500">Mês Anterior</Badge>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex flex-col">
-                                                <span className={`text-2xl font-black ${comparativoMoM.variacao >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                    {comparativoMoM.variacao >= 0 ? '+' : ''}{comparativoMoM.variacao.toFixed(1)}%
-                                                </span>
-                                                <span className="text-[10px] text-gray-400 font-medium mt-0.5">Anterior: {formatarMoeda(comparativoMoM.totalMesAnterior)}</span>
-                                            </div>
-                                            <div className={`p-2.5 rounded-xl ${comparativoMoM.variacao >= 0 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20' : 'bg-red-50 text-red-600 dark:bg-red-900/20'}`}>
-                                                {comparativoMoM.variacao >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* YoY Card */}
-                                    <div className="group relative p-4 rounded-2xl bg-white dark:bg-gray-900 border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md transition-all duration-300">
-                                        <div className="flex items-start justify-between mb-3">
-                                            <div>
-                                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Ano contra Ano</span>
-                                                <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mt-0.5">YoY Performance</h4>
-                                            </div>
-                                            <Badge variant="outline" className="text-[9px] font-medium border-gray-200 text-gray-500">{comparativoYoY.label}</Badge>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex flex-col">
-                                                <span className={`text-2xl font-black ${comparativoYoY.variacao >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                    {comparativoYoY.variacao >= 0 ? '+' : ''}{comparativoYoY.variacao.toFixed(1)}%
-                                                </span>
-                                                <span className="text-[10px] text-gray-400 font-medium mt-0.5">Anterior: {formatarMoeda(comparativoYoY.totalAnoPassado)}</span>
-                                            </div>
-                                            <div className={`p-2.5 rounded-xl ${comparativoYoY.variacao >= 0 ? 'bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20' : 'bg-red-50 text-red-600 dark:bg-red-900/20'}`}>
-                                                {comparativoYoY.variacao >= 0 ? <TrendingUp className="w-5 h-5" /> : <TrendingDown className="w-5 h-5" />}
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            {/* Performance Comercial */}
-            <div className="mt-6 mb-4 flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                <div>
-                    <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Performance Comercial</h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400">Comissões, evolução dos vendedores e comparação de desempenho.</p>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
-                        Comissões: {formatarMoeda(totalComissoes)}
-                    </Badge>
-                    <Badge variant="outline" className="text-gray-500 bg-white dark:bg-gray-900">
-                        Vendedores ativos: {rankingVendedores.length}
-                    </Badge>
-                </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Comissões a Pagar */}
-                <Card className="border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <DollarSign className="w-5 h-5 text-amber-600" />
-                            Comissões a Pagar
-                            <Badge className="ml-auto bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
-                                {formatarMoeda(totalComissoesCard)}
-                            </Badge>
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                        {comissoesCardLista.length > 0 ? (
-                            <div className="space-y-3 max-h-[250px] overflow-y-auto pr-2">
-                                {comissoesCardLista.map((v, i) => (
-                                    <div key={v.id || v.nome} className="flex items-center justify-between p-2 bg-white dark:bg-neutral-800 rounded-lg shadow-sm border border-transparent hover:border-amber-200 transition-colors">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-8 h-8 rounded-full bg-amber-100 dark:bg-amber-900/40 flex items-center justify-center text-sm font-bold text-amber-700 shadow-sm">
-                                                {i + 1}
-                                            </div>
-                                            <div>
-                                                <p className="font-medium text-sm text-gray-800 dark:text-gray-200">{v.nome}</p>
-                                                <p className="text-xs text-gray-500">{v.vendas} vendas</p>
-                                            </div>
-                                        </div>
-                                        <p className="font-bold text-amber-600">{formatarMoeda(v.comissao)}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        ) : (
-                            <div className="text-center py-8 text-gray-500">
-                                <DollarSign className="w-10 h-10 mx-auto mb-2 opacity-20" />
-                                <p>Nenhuma comissão no período</p>
-                            </div>
+                            ))
                         )}
-                    </CardContent>
-                </Card>
-                {/* Visão Rápida */}
-                <Card>
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <TrendingUp className="w-5 h-5 text-emerald-600" />
-                            Visão Rápida
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                        <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
-                            <span className="text-sm text-gray-600 dark:text-gray-300">MoM</span>
-                            <span className={`font-bold ${comparativoMoM.variacao >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                {comparativoMoM.variacao >= 0 ? '+' : ''}{comparativoMoM.variacao.toFixed(1)}%
-                            </span>
-                        </div>
-                        <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
-                            <span className="text-sm text-gray-600 dark:text-gray-300">YoY</span>
-                            <span className={`font-bold ${comparativoYoY.variacao >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                                {comparativoYoY.variacao >= 0 ? '+' : ''}{comparativoYoY.variacao.toFixed(1)}%
-                            </span>
-                        </div>
-                        <div className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
-                            <span className="text-sm text-gray-600 dark:text-gray-300">Média comissão/vendedor</span>
-                            <span className="font-bold text-amber-600">
-                                {formatarMoeda(comissoesPorVendedor.length ? totalComissoes / comissoesPorVendedor.length : 0)}
-                            </span>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
+                    </div>
 
-            {/* Top Vendedores */}
-            <div className="mt-6">
-                <Card className="overflow-hidden shadow-sm border border-gray-100 dark:border-gray-800">
-                    <CardHeader className="bg-gray-50/50 dark:bg-gray-900/50 border-b border-gray-100 dark:border-gray-800 pb-4">
-                        <div className="flex items-center justify-between">
-                            <CardTitle className="text-xl font-bold flex items-center gap-2">
-                                <Award className="w-6 h-6 text-yellow-500 fill-yellow-500/20" />
-                                Top Vendedores (Mês Atual)
-                            </CardTitle>
-                            <Badge variant="outline" className="text-gray-500 bg-white dark:bg-gray-900">
-                                Top {rankingVendedores.length}
-                            </Badge>
-                        </div>
-                    </CardHeader>
-                    <CardContent className="p-6">
-                        <div className="space-y-4">
-                            {rankingVendedores.length > 0 ? rankingVendedores.map((v, i) => (
-                                <div key={v.nome} className="group flex flex-col md:flex-row items-center justify-between p-4 bg-white dark:bg-gray-900 rounded-2xl border border-gray-100 dark:border-gray-800 shadow-sm hover:shadow-md hover:border-yellow-200/60 dark:hover:border-yellow-900/40 transition-all duration-300 gap-6">
-
-                                    {/* 1. Perfil do Vendedor */}
-                                    <div className="flex items-center gap-4 w-full md:w-[250px] shrink-0">
-                                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-2xl shadow-inner ${i === 0 ? 'bg-gradient-to-br from-yellow-100 to-amber-200 text-amber-700 border-2 border-yellow-300' :
-                                            i === 1 ? 'bg-gradient-to-br from-gray-100 to-gray-300 text-gray-700 border-2 border-gray-400' :
-                                                i === 2 ? 'bg-gradient-to-br from-orange-100 to-orange-300 text-orange-800 border-2 border-orange-400' :
-                                                    'bg-gray-50 text-gray-600 border border-gray-200 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-300'
-                                            }`}>
-                                            <span className="text-xl font-bold">#{i + 1}</span>
-                                        </div>
-                                        <div>
-                                            <p className="font-bold text-gray-900 dark:text-white text-lg tracking-tight group-hover:text-yellow-600 dark:group-hover:text-yellow-500 transition-colors">{v.nome}</p>
-                                            <div className="flex items-center gap-1.5 mt-0.5">
-                                                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                                                    {v.qtd} vendas
-                                                </Badge>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* 2. Gráfico de Evolução / Comparativo */}
-                                    <div className="w-full md:flex-grow min-w-[250px] flex flex-col gap-1">
-                                        {/* Toggle do gráfico */}
-                                        <div className="flex items-center gap-1 justify-end">
-                                            <button
-                                                onClick={() => setVendedorChartMode(prev => ({ ...prev, [v.nome]: 'evolucao' }))}
-                                                className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all ${(vendedorChartMode[v.nome] || 'evolucao') === 'evolucao'
-                                                    ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400'
-                                                    : 'text-gray-400 hover:text-gray-600'
-                                                    }`}
-                                            >
-                                                Evolução
-                                            </button>
-                                            <button
-                                                onClick={() => setVendedorChartMode(prev => ({ ...prev, [v.nome]: 'comparativo' }))}
-                                                className={`px-2 py-0.5 rounded-md text-[10px] font-semibold transition-all ${vendedorChartMode[v.nome] === 'comparativo'
-                                                    ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-400'
-                                                    : 'text-gray-400 hover:text-gray-600'
-                                                    }`}
-                                            >
-                                                MoM
-                                            </button>
-                                        </div>
-                                        <div className="h-24">
-                                            {v.dadosGrafico && v.dadosGrafico.length > 0 ? (
-                                                (vendedorChartMode[v.nome] || 'evolucao') === 'evolucao' ? (
-                                                    <ResponsiveContainer width="100%" height="100%">
-                                                        <AreaChart data={v.dadosGrafico} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                                                            <defs>
-                                                                <linearGradient id={`colorVendasTop${i}`} x1="0" y1="0" x2="0" y2="1">
-                                                                    <stop offset="5%" stopColor={i === 0 ? "#EAB308" : "#3B82F6"} stopOpacity={0.4} />
-                                                                    <stop offset="95%" stopColor={i === 0 ? "#EAB308" : "#3B82F6"} stopOpacity={0} />
-                                                                </linearGradient>
-                                                            </defs>
-                                                            <XAxis dataKey="dia" hide />
-                                                            <Tooltip content={<ChartTooltip assistencias={assistencias} />} />
-                                                            {v.metaDiaria > 0 && (
-                                                                <ReferenceLine
-                                                                    y={v.metaDiaria}
-                                                                    stroke="#EF4444"
-                                                                    strokeWidth={1.5}
-                                                                    strokeDasharray="6 3"
-                                                                    label={{ value: `Meta: ${formatarMoeda(v.metaDiaria)}/dia`, position: 'insideTopRight', fill: '#EF4444', fontSize: 9, fontWeight: 600 }}
-                                                                />
-                                                            )}
-                                                            <Area
-                                                                type="monotone"
-                                                                dataKey="total"
-                                                                stroke={i === 0 ? "#EAB308" : "#3B82F6"}
-                                                                strokeWidth={2.5}
-                                                                fillOpacity={1}
-                                                                fill={`url(#colorVendasTop${i})`}
-                                                                isAnimationActive={true}
-                                                            />
-                                                        </AreaChart>
-                                                    </ResponsiveContainer>
-                                                ) : (
-                                                    <ResponsiveContainer width="100%" height="100%">
-                                                        <LineChart data={v.dadosComparativoVendedor} margin={{ top: 5, right: 10, left: 0, bottom: 0 }}>
-                                                            <XAxis dataKey="dia" hide />
-                                                            <Tooltip
-                                                                contentStyle={{ borderRadius: '12px', fontSize: '11px', padding: '6px 10px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                                                                formatter={(value, name) => [formatarMoeda(value), name === 'total' ? 'Mês Atual' : 'Mês Anterior']}
-                                                                labelFormatter={(label) => {
-                                                                    if (typeof label !== 'string') return `Dia ${label}`;
-                                                                    return `Dia ${label.split('-')[2] || label}`;
-                                                                }}
-                                                                cursor={{ stroke: '#9CA3AF', strokeWidth: 1, strokeDasharray: '4 4' }}
-                                                            />
-                                                            {v.metaDiaria > 0 && (
-                                                                <ReferenceLine
-                                                                    y={v.metaDiaria}
-                                                                    stroke="#EF4444"
-                                                                    strokeWidth={1.5}
-                                                                    strokeDasharray="6 3"
-                                                                    label={{ value: `Meta`, position: 'insideTopRight', fill: '#EF4444', fontSize: 9, fontWeight: 600 }}
-                                                                />
-                                                            )}
-                                                            <Line type="monotone" dataKey="total" stroke={i === 0 ? '#EAB308' : '#3B82F6'} strokeWidth={2.5} dot={false} name="Mês Atual" />
-                                                            <Line type="monotone" dataKey="totalMesAnterior" stroke="#9CA3AF" strokeWidth={1.5} strokeDasharray="5 5" dot={false} name="Mês Anterior" />
-                                                        </LineChart>
-                                                    </ResponsiveContainer>
-                                                )
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-xs text-gray-400">
-                                                    Gráfico indisponível
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {/* 3. Métricas e Metas */}
-                                    <div className="flex items-center gap-8 w-full md:w-auto shrink-0 justify-end">
-
-                                        {/* Total e MoM */}
-                                        <div className="flex flex-col items-end min-w-[120px]">
-                                            <span className="text-xl font-bold text-gray-900 dark:text-white">{formatarMoeda(v.total)}</span>
-                                            <div className={`flex items-center gap-1.5 mt-0.5 text-xs font-semibold px-2 py-0.5 rounded-full ${v.variacaoMoM >= 0 ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30' : 'bg-red-50 text-red-700 dark:bg-red-900/30'}`}>
-                                                {v.variacaoMoM >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
-                                                <span>{v.variacaoMoM >= 0 ? '+' : ''}{v.variacaoMoM.toFixed(1)}% MoM</span>
-                                            </div>
-                                        </div>
-
-                                        {/* Progresso da Meta */}
-                                        <div className="w-[140px] flex flex-col gap-1.5 opacity-90 group-hover:opacity-100 transition-opacity">
-                                            {v.meta > 0 ? (
-                                                <>
-                                                    <div className="flex justify-between items-end text-xs font-medium">
-                                                        <span className="text-gray-500 flex items-center gap-1"><Target className="w-3 h-3" /> Meta</span>
-                                                        <span className={v.progresso >= 100 ? 'text-green-600 font-bold' : 'text-gray-700 dark:text-gray-300'}>
-                                                            {v.progresso.toFixed(0)}%
-                                                        </span>
-                                                    </div>
-                                                    <Progress value={Math.min(v.progresso, 100)} className={`h-2 shadow-inner ${v.progresso >= 100 ? '[&>div]:bg-green-500' : ''}`} />
-                                                    <div className="text-[10px] text-gray-400 text-right font-medium">
-                                                        {formatarMoeda(v.meta)}
-                                                    </div>
-                                                </>
-                                            ) : (
-                                                <div className="h-full flex flex-col items-center justify-center border border-dashed border-gray-200 dark:border-gray-800 rounded-lg p-2 bg-gray-50/50 dark:bg-gray-900/50">
-                                                    <Target className="w-4 h-4 text-gray-400 mb-1" />
-                                                    <span className="text-[10px] text-gray-400 font-medium">Sem meta</span>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                    </div>
-
-                                </div>
-                            )) : (
-                                <div className="text-center py-16 text-gray-500">
-                                    <div className="w-16 h-16 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mx-auto mb-4">
-                                        <Award className="w-8 h-8 opacity-40 text-gray-600" />
-                                    </div>
-                                    <p className="font-semibold text-gray-700 dark:text-gray-300 text-lg">Nenhuma venda encontrada</p>
-                                    <p className="text-sm mt-1">Os top vendedores aparecerão aqui.</p>
-                                </div>
-                            )}
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            {/* Operações de Estoque e Entrega */}
-            <div className="mt-6">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white flex items-center gap-2 mb-1">
-                    <Package className="w-5 h-5 text-blue-600" />
-                    Operações de Estoque e Entrega
-                </h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">Alertas de giro, curva ABC e acompanhamento de execução logística.</p>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* Curva ABC */}
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-lg flex items-center gap-2">
-                                <BarChart3 className="w-5 h-5 text-blue-600" />
-                                Curva ABC
-                                <div className="ml-auto flex gap-2">
-                                    <Badge className="bg-green-100 text-green-700">A: {curvaABC.resumo.A}</Badge>
-                                    <Badge className="bg-yellow-100 text-yellow-700">B: {curvaABC.resumo.B}</Badge>
-                                    <Badge className="bg-red-100 text-red-700">C: {curvaABC.resumo.C}</Badge>
-                                </div>
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            {curvaABC.produtos.length > 0 ? (
-                                <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                                    {curvaABC.produtos.map((p, i) => (
-                                        <div
-                                            key={p.id}
-                                            className="flex items-center justify-between p-2 rounded-lg bg-gray-50 dark:bg-neutral-800 hover:bg-gray-100 cursor-pointer transition-colors"
-                                            onClick={() => {
-                                                if (p.produtoInfo) {
-                                                    setProdutoDetalhe(p.produtoInfo);
-                                                    setProdutoModalOpen(true);
-                                                } else {
-                                                    // Fallback se não tiver info completa, tenta buscar de novo ou avisa
-                                                    const freshInfo = produtos.find(prod => prod.id === p.id);
-                                                    if (freshInfo) {
-                                                        setProdutoDetalhe(freshInfo);
-                                                        setProdutoModalOpen(true);
-                                                    } else {
-                                                        toast.info(`Detalhes não disponíveis para ${p.nome}`);
-                                                    }
-                                                }
-                                            }}
-                                        >
-                                            <div className="flex items-center gap-2">
-                                                <Badge className={
-                                                    p.classificacao === 'A' ? 'bg-green-100 text-green-700' :
-                                                        p.classificacao === 'B' ? 'bg-yellow-100 text-yellow-700' :
-                                                            'bg-red-100 text-red-700'
-                                                }>{p.classificacao}</Badge>
-                                                <span className="text-sm truncate max-w-[150px]" title="Clique para ver detalhes">{p.nome}</span>
-                                            </div>
-                                            <span className="text-sm font-medium">{formatarMoeda(p.valor)}</span>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="text-center py-6 text-gray-500">
-                                    <BarChart3 className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                                    <p className="text-sm">Sem dados de vendas</p>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    {/* Giro de Estoque */}
-                    <Card className={giroEstoque.totalEncalhados > 0 ? 'border-orange-200' : ''}>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-lg flex items-center gap-2">
-                                <Box className="w-5 h-5 text-purple-600" />
-                                Giro de Estoque
-                                <div className="ml-auto flex items-center gap-2">
-                                    <Select value={String(giroFiltro)} onValueChange={(v) => setGiroFiltro(Number(v))}>
-                                        <SelectTrigger className="w-[100px] h-7 text-xs">
-                                            <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                            <SelectItem value="30">30 dias</SelectItem>
-                                            <SelectItem value="60">60 dias</SelectItem>
-                                            <SelectItem value="90">90 dias</SelectItem>
-                                            <SelectItem value="120">120 dias</SelectItem>
-                                        </SelectContent>
-                                    </Select>
-                                    {giroEstoque.totalEncalhados > 0 && (
-                                        <Badge variant="destructive">
-                                            <AlertCircle className="w-3 h-3 mr-1" />
-                                            {giroEstoque.totalEncalhados}
-                                        </Badge>
-                                    )}
-                                </div>
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            {/* Métricas Resumidas - Expandido */}
-                            {giroEstoque.totalEncalhados > 0 && (
-                                <>
-                                    <div className="grid grid-cols-2 gap-2 mb-3">
-                                        <div className="p-2 rounded-lg bg-orange-50 dark:bg-orange-950/30 text-center">
-                                            <p className="text-lg font-bold text-orange-600">{formatarMoeda(giroEstoque.totalValorEncalhado)}</p>
-                                            <p className="text-[10px] text-gray-500">Valor parado</p>
-                                        </div>
-                                        <div className="p-2 rounded-lg bg-red-50 dark:bg-red-950/30 text-center">
-                                            <p className="text-lg font-bold text-red-600">{giroEstoque.produtosCriticos}</p>
-                                            <p className="text-[10px] text-gray-500">Classe C (liquidar)</p>
-                                        </div>
-                                    </div>
-
-                                    {/* Métricas Adicionais */}
-                                    <div className="grid grid-cols-3 gap-1.5 mb-3">
-                                        <div className="p-1.5 rounded bg-gray-50 dark:bg-gray-800 text-center">
-                                            <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                {giroEstoque.encalhados.length > 0
-                                                    ? Math.round(giroEstoque.encalhados.reduce((sum, p) => sum + (p.diasSemVenda === 999 ? giroFiltro : p.diasSemVenda), 0) / giroEstoque.encalhados.length)
-                                                    : 0} dias
-                                            </p>
-                                            <p className="text-[9px] text-gray-500">Média parado</p>
-                                        </div>
-                                        <div className="p-1.5 rounded bg-gray-50 dark:bg-gray-800 text-center">
-                                            <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                {formatarMoeda(giroEstoque.totalEncalhados > 0 ? giroEstoque.totalValorEncalhado / giroEstoque.totalEncalhados : 0)}
-                                            </p>
-                                            <p className="text-[9px] text-gray-500">Valor médio/prod</p>
-                                        </div>
-                                        <div className="p-1.5 rounded bg-gray-50 dark:bg-gray-800 text-center">
-                                            <p className="text-xs font-semibold text-gray-700 dark:text-gray-300">
-                                                {giroEstoque.encalhados.reduce((sum, p) => sum + (p.quantidade_estoque || 0), 0)} un
-                                            </p>
-                                            <p className="text-[9px] text-gray-500">Total unidades</p>
-                                        </div>
-                                    </div>
-
-                                    {/* Distribuição ABC dos Encalhados */}
-                                    <div className="flex items-center gap-1 mb-3 text-xs">
-                                        <span className="text-gray-500">Distribuição:</span>
-                                        <Badge className="bg-green-100 text-green-700 text-[10px] px-1.5 py-0">
-                                            A: {giroEstoque.encalhados.filter(p => p.classificacaoABC === 'A').length}
-                                        </Badge>
-                                        <Badge className="bg-yellow-100 text-yellow-700 text-[10px] px-1.5 py-0">
-                                            B: {giroEstoque.encalhados.filter(p => p.classificacaoABC === 'B').length}
-                                        </Badge>
-                                        <Badge className="bg-red-100 text-red-700 text-[10px] px-1.5 py-0">
-                                            C: {giroEstoque.encalhados.filter(p => p.classificacaoABC === 'C').length}
-                                        </Badge>
-                                    </div>
-
-                                    {/* Dica de Ação */}
-                                    {giroEstoque.produtosCriticos > 0 && (
-                                        <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 mb-3 border border-amber-200 dark:border-amber-800">
-                                            <p className="text-xs text-amber-700 dark:text-amber-400">
-                                                <strong>Sugestão:</strong> {giroEstoque.produtosCriticos} produto(s) Classe C parado(s) há mais de {giroFiltro} dias. Considere promoção, giro interno entre lojas ou campanha de saída.
-                                            </p>
-                                        </div>
-                                    )}
-                                </>
-                            )}
-
-                            {giroEstoque.encalhados.length > 0 ? (
-                                <div className="space-y-2 max-h-[200px] overflow-y-auto">
-                                    {giroEstoque.encalhados.map(p => (
-                                        <div key={p.id} className={`flex items-center justify-between p-2 rounded-lg transition-colors group ${p.diasSemVenda === 999
-                                            ? 'bg-red-50 dark:bg-red-950/20 hover:bg-red-100'
-                                            : p.diasSemVenda > 60
-                                                ? 'bg-orange-50 dark:bg-orange-950/20 hover:bg-orange-100'
-                                                : 'bg-yellow-50 dark:bg-yellow-950/20 hover:bg-yellow-100'
-                                            }`}>
-                                            <div className="flex items-center gap-2 flex-1 min-w-0">
-                                                <Badge className={
-                                                    p.classificacaoABC === 'A' ? 'bg-green-100 text-green-700' :
-                                                        p.classificacaoABC === 'B' ? 'bg-yellow-100 text-yellow-700' :
-                                                            'bg-red-100 text-red-700'
-                                                }>{p.classificacaoABC}</Badge>
-                                                <div className="min-w-0 flex-1">
-                                                    <span className="text-sm truncate block font-medium">{p.nome}</span>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-[10px] ${p.diasSemVenda === 999 ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                                                            {p.diasSemVenda === 999 ? 'Nunca vendido' : `${p.diasSemVenda} dias sem venda`}
-                                                        </span>
-                                                        {p.qtdVendas > 0 && (
-                                                            <span className="text-[10px] text-green-600">({p.qtdVendas} vendas antes)</span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <div className="text-right">
-                                                    <p className="text-xs font-medium">{formatarMoeda(p.valorEstoque)}</p>
-                                                    <p className="text-[10px] text-gray-500">{p.quantidade_estoque} un</p>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            ) : (
-                                <div className="text-center py-6 text-gray-500">
-                                    <Check className="w-8 h-8 mx-auto mb-2 text-green-500" />
-                                    <p className="text-sm font-medium">Estoque saudável</p>
-                                    <p className="text-xs text-gray-400">Nenhum produto parado há mais de {giroFiltro} dias</p>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
-
-                    {/* Status de Entregas */}
-                    <Card>
-                        <CardHeader className="pb-2">
-                            <CardTitle className="text-lg flex items-center gap-2">
-                                <Truck className="w-5 h-5 text-cyan-600" />
-                                Status de Entregas
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="grid grid-cols-3 gap-4">
-                                <div className="text-center p-3 rounded-lg bg-yellow-50 dark:bg-yellow-950/20">
-                                    <p className="text-2xl font-bold text-yellow-600">{statusEntregas.pendentes.length}</p>
-                                    <p className="text-xs text-gray-600">Pendentes</p>
-                                </div>
-                                <div className="text-center p-3 rounded-lg bg-blue-50 dark:bg-blue-950/20">
-                                    <p className="text-2xl font-bold text-blue-600">{statusEntregas.emRota.length}</p>
-                                    <p className="text-xs text-gray-600">Em Rota</p>
-                                </div>
-                                <div className={`text-center p-3 rounded-lg ${statusEntregas.atrasadas.length > 0 ? 'bg-red-100 dark:bg-red-950/30' : 'bg-green-50 dark:bg-green-950/20'}`}>
-                                    <p className={`text-2xl font-bold ${statusEntregas.atrasadas.length > 0 ? 'text-red-600' : 'text-green-600'}`}>{statusEntregas.atrasadas.length}</p>
-                                    <p className="text-xs text-gray-600">Atrasadas</p>
-                                </div>
-                            </div>
-                            {statusEntregas.atrasadas.length > 0 && (
-                                <div className="mt-3 p-2 rounded-lg bg-red-50 dark:bg-red-950/20">
-                                    <p className="text-xs text-red-600 font-medium mb-1">Entregas atrasadas requerem atenção.</p>
-                                </div>
-                            )}
-                        </CardContent>
-                    </Card>
-
+                    <Link to="/admin/LogisticaSemanal" className="pt-3 border-t border-slate-50 dark:border-neutral-800 text-[11px] text-emerald-600 hover:text-emerald-700 font-semibold flex items-center justify-center gap-1">
+                        <span>Ver todas as entregas</span>
+                        <ArrowRight className="w-3 h-3" />
+                    </Link>
                 </div>
             </div>
 
-            {/* Painel de Pendências */}
-            <div className="mt-6 mb-4">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Painel de Pendências</h2>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Resumo consolidado dos itens que precisam de ação imediata.</p>
-            </div>
+            {/* ================================================================= */}
+            {/* LINHA 2: PRODUTOS MAIS VENDIDOS, RECEBIMENTOS VS PAGAMENTOS, ESTOQUE */}
+            {/* ================================================================= */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* 1. Produtos mais vendidos */}
+                <div className="bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Produtos mais vendidos
+                        </h3>
+                        <Select value={filtroTopProdutos} onValueChange={setFiltroTopProdutos}>
+                            <SelectTrigger className="h-7 text-[11px] px-2.5 rounded-lg border-slate-200 bg-slate-50 dark:bg-neutral-800 w-28">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="mes">Este mês</SelectItem>
+                                <SelectItem value="geral">Geral</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                {/* Entregas Pendentes */}
-                <Card className={pendencias.entregas.length > 0 ? 'border-orange-200 bg-orange-50/50 dark:bg-orange-950/20' : ''}>
-                    <CardContent className="p-4">
-                        <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg ${pendencias.entregas.length > 0 ? 'bg-orange-100 dark:bg-orange-900/30' : 'bg-gray-100 dark:bg-gray-800'}`}>
-                                <Truck className={`w-5 h-5 ${pendencias.entregas.length > 0 ? 'text-orange-600' : 'text-gray-500'}`} />
-                            </div>
-                            <div className="flex-1">
-                                <p className="font-medium text-sm">Entregas Pendentes</p>
-                                <p className={`text-2xl font-bold ${pendencias.entregas.length > 0 ? 'text-orange-600' : 'text-gray-400'}`}>
-                                    {pendencias.entregas.length}
-                                </p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Montagens Pendentes */}
-                <Card className={pendencias.montagens.length > 0 ? 'border-blue-200 bg-blue-50/50 dark:bg-blue-950/20' : ''}>
-                    <CardContent className="p-4">
-                        <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg ${pendencias.montagens.length > 0 ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-gray-100 dark:bg-gray-800'}`}>
-                                <Wrench className={`w-5 h-5 ${pendencias.montagens.length > 0 ? 'text-blue-600' : 'text-gray-500'}`} />
-                            </div>
-                            <div className="flex-1">
-                                <p className="font-medium text-sm">Montagens Pendentes</p>
-                                <p className={`text-2xl font-bold ${pendencias.montagens.length > 0 ? 'text-blue-600' : 'text-gray-400'}`}>
-                                    {pendencias.montagens.length}
-                                </p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Pagamentos em Aberto */}
-                <Card className={pendencias.pagamentos.length > 0 ? 'border-red-200 bg-red-50/50 dark:bg-red-950/20' : ''}>
-                    <CardContent className="p-4">
-                        <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg ${pendencias.pagamentos.length > 0 ? 'bg-red-100 dark:bg-red-900/30' : 'bg-gray-100 dark:bg-gray-800'}`}>
-                                <CreditCard className={`w-5 h-5 ${pendencias.pagamentos.length > 0 ? 'text-red-600' : 'text-gray-500'}`} />
-                            </div>
-                            <div className="flex-1">
-                                <p className="font-medium text-sm">Pagamentos Abertos</p>
-                                <p className={`text-2xl font-bold ${pendencias.pagamentos.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                                    {pendencias.pagamentos.length}
-                                </p>
-                                {pendencias.pagamentos.length > 0 && (
-                                    <p className="text-xs text-gray-500">
-                                        {formatarMoeda(pendencias.pagamentos.reduce((sum, v) => sum + (v.valor_restante || 0), 0))}
-                                    </p>
-                                )}
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-
-                {/* Triagem Pendente */}
-                <Card className={pendencias.triagem.length > 0 ? 'border-purple-200 bg-purple-50/50 dark:bg-purple-950/20' : ''}>
-                    <CardContent className="p-4">
-                        <div className="flex items-center gap-3">
-                            <div className={`p-2 rounded-lg ${pendencias.triagem.length > 0 ? 'bg-purple-100 dark:bg-purple-900/30' : 'bg-gray-100 dark:bg-gray-800'}`}>
-                                <ClipboardList className={`w-5 h-5 ${pendencias.triagem.length > 0 ? 'text-purple-600' : 'text-gray-500'}`} />
-                            </div>
-                            <div className="flex-1">
-                                <p className="font-medium text-sm">Triagem Pendente</p>
-                                <p className={`text-2xl font-bold ${pendencias.triagem.length > 0 ? 'text-purple-600' : 'text-gray-400'}`}>
-                                    {pendencias.triagem.length}
-                                </p>
-                            </div>
-                        </div>
-                    </CardContent>
-                </Card>
-            </div>
-
-            {/* Operações Complementares */}
-            <div className="mt-6 space-y-6">
-                <h2 className="text-lg font-semibold text-gray-800 dark:text-white">Operações Complementares</h2>
-
-                {/* Seção de Tokens Gerenciais */}
-                <Card className="border-amber-200 bg-gradient-to-br from-amber-50 to-orange-50 dark:from-amber-950/20 dark:to-orange-950/20">
-                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                    <CardTitle className="text-lg flex items-center gap-2">
-                        <Key className="w-5 h-5 text-amber-600" />
-                        Tokens de Autorização
-                    </CardTitle>
-                    <Dialog open={tokenModalOpen} onOpenChange={setTokenModalOpen}>
-                        <DialogTrigger asChild>
-                            <Button size="sm" className="bg-amber-600 hover:bg-amber-700">
-                                <Plus className="w-4 h-4 mr-1" />
-                                Criar Token
-                            </Button>
-                        </DialogTrigger>
-                        <DialogContent className="sm:max-w-md">
-                            <DialogHeader>
-                                <DialogTitle className="flex items-center gap-2">
-                                    <Key className="w-5 h-5 text-amber-600" />
-                                    Criar Token de Autorização
-                                </DialogTitle>
-                            </DialogHeader>
-
-                            {tokenGerado ? (
-                                // Mostrar código gerado
-                                <div className="py-6 space-y-6">
-                                    <div className="text-center">
-                                        <p className="text-sm text-gray-500 mb-2">Código do Token (6 dígitos)</p>
-                                        <div className="flex items-center justify-center gap-3">
-                                            <code className="font-mono font-bold text-5xl text-amber-600 tracking-wider">
-                                                {tokenGerado.codigo}
-                                            </code>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => copiarCodigo(tokenGerado.codigo)}
-                                                className="h-10 w-10"
-                                            >
-                                                {copiado === tokenGerado.codigo ? (
-                                                    <Check className="w-5 h-5 text-green-600" />
-                                                ) : (
-                                                    <Copy className="w-5 h-5" />
-                                                )}
-                                            </Button>
-                                        </div>
-                                    </div>
-
-                                    <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-lg space-y-2">
-                                        <div className="flex items-center justify-between text-sm">
-                                            <span className="text-gray-600">Tipo:</span>
-                                            <Badge className={tokenGerado.tipo_token === 'SUPERVISOR_MODE' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}>
-                                                {tokenGerado.tipo_token === 'SUPERVISOR_MODE' ? '👑 Modo Supervisor' : '🎫 Uso Único'}
-                                            </Badge>
-                                        </div>
-                                        <div className="flex items-center justify-between text-sm">
-                                            <span className="text-gray-600">Permissão:</span>
-                                            <span className="font-medium">{tokenGerado.permissao}</span>
-                                        </div>
-                                        {tokenGerado.valor_limite && (
-                                            <div className="flex items-center justify-between text-sm">
-                                                <span className="text-gray-600">Limite:</span>
-                                                <span className="font-medium">{tokenGerado.valor_limite}%</span>
-                                            </div>
-                                        )}
-                                        <div className="flex items-center justify-between text-sm">
-                                            <span className="text-gray-600">Expira em:</span>
-                                            <span className="font-medium">{tokenGerado.validade_minutos} min</span>
-                                        </div>
-                                    </div>
-
-                                    <DialogFooter>
-                                        <Button
-                                            variant="outline"
-                                            onClick={() => {
-                                                setTokenGerado(null);
-                                                setTokenModalOpen(false);
-                                            }}
-                                            className="w-full"
-                                        >
-                                            Fechar
-                                        </Button>
-                                    </DialogFooter>
-                                </div>
-                            ) : (
-                                // Formulário de criação
-                                <div className="space-y-4 py-4">
-                                    {/* Seletor de Modo */}
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <button
-                                            type="button"
-                                            onClick={() => setNovoToken({ ...novoToken, tipoToken: 'SINGLE_USE', maxUsos: 1 })}
-                                            className={`p-4 rounded-lg border-2 transition-all ${novoToken.tipoToken === 'SINGLE_USE'
-                                                ? 'border-blue-500 bg-blue-50 dark:bg-blue-950/30'
-                                                : 'border-gray-200 hover:border-gray-300'
-                                                }`}
-                                        >
-                                            <div className="text-2xl mb-1">🎫</div>
-                                            <p className="font-medium text-sm">Uso Único</p>
-                                            <p className="text-xs text-gray-500">1 operação específica</p>
-                                        </button>
-                                        <button
-                                            type="button"
-                                            onClick={() => setNovoToken({ ...novoToken, tipoToken: 'SUPERVISOR_MODE', maxUsos: 10 })}
-                                            className={`p-4 rounded-lg border-2 transition-all ${novoToken.tipoToken === 'SUPERVISOR_MODE'
-                                                ? 'border-purple-500 bg-purple-50 dark:bg-purple-950/30'
-                                                : 'border-gray-200 hover:border-gray-300'
-                                                }`}
-                                        >
-                                            <div className="text-2xl mb-1">👑</div>
-                                            <p className="font-medium text-sm">Supervisor</p>
-                                            <p className="text-xs text-gray-500">Múltiplas operações</p>
-                                        </button>
-                                    </div>
-
-                                    {/* Configurações */}
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <Label>Permissão</Label>
-                                            <Select
-                                                value={novoToken.permissao}
-                                                onValueChange={(v) => setNovoToken({ ...novoToken, permissao: v })}
-                                            >
-                                                <SelectTrigger className="mt-1">
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="DESCONTO">Desconto</SelectItem>
-                                                    <SelectItem value="CANCELAMENTO">❌ Cancelamento</SelectItem>
-                                                    <SelectItem value="ALTERACAO_PRECO">✏️ Alt. Preço</SelectItem>
-                                                    <SelectItem value="SUPER_CAIXA">⭐ Super Caixa</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                        <div>
-                                            <Label>Validade</Label>
-                                            <Select
-                                                value={String(novoToken.validadeMinutos)}
-                                                onValueChange={(v) => setNovoToken({ ...novoToken, validadeMinutos: Number(v) })}
-                                            >
-                                                <SelectTrigger className="mt-1">
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="5">5 minutos</SelectItem>
-                                                    <SelectItem value="15">15 minutos</SelectItem>
-                                                    <SelectItem value="30">30 minutos</SelectItem>
-                                                    <SelectItem value="60">1 hora</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    </div>
-
-                                    {novoToken.permissao !== 'SUPER_CAIXA' && (
-                                        <div>
-                                            <Label>Limite de Valor (%)</Label>
-                                            <div className="flex items-center gap-2 mt-1">
-                                                <Input
-                                                    type="number"
-                                                    value={novoToken.valorLimite}
-                                                    onChange={(e) => setNovoToken({ ...novoToken, valorLimite: Number(e.target.value) })}
-                                                    className="w-24"
-                                                    min={1}
-                                                    max={100}
-                                                />
-                                                <span className="text-sm text-gray-500">% máximo</span>
-                                            </div>
-                                        </div>
+                    <div className="space-y-2.5 flex-1">
+                        {topProdutosRanking.map((prod, idx) => (
+                            <div key={prod.id} className="flex items-center justify-between gap-2.5 p-1.5 rounded-xl hover:bg-slate-50 dark:hover:bg-neutral-800/40 transition-colors">
+                                <span className="text-xs font-bold text-slate-400 w-4 text-center">{idx + 1}</span>
+                                <div className="w-8 h-8 rounded-lg bg-slate-100 dark:bg-neutral-800 overflow-hidden flex items-center justify-center shrink-0">
+                                    {prod.foto ? (
+                                        <img src={prod.foto} alt={prod.nome} className="w-full h-full object-cover" />
+                                    ) : (
+                                        <Package className="w-4 h-4 text-slate-400" />
                                     )}
-
-                                    {novoToken.tipoToken === 'SUPERVISOR_MODE' && (
-                                        <div>
-                                            <Label>Máximo de Usos</Label>
-                                            <Select
-                                                value={String(novoToken.maxUsos)}
-                                                onValueChange={(v) => setNovoToken({ ...novoToken, maxUsos: Number(v) })}
-                                            >
-                                                <SelectTrigger className="mt-1">
-                                                    <SelectValue />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    <SelectItem value="5">5 usos</SelectItem>
-                                                    <SelectItem value="10">10 usos</SelectItem>
-                                                    <SelectItem value="20">20 usos</SelectItem>
-                                                    <SelectItem value="50">50 usos</SelectItem>
-                                                </SelectContent>
-                                            </Select>
-                                        </div>
-                                    )}
-
-                                    <DialogFooter className="pt-4">
-                                        <Button variant="outline" onClick={() => setTokenModalOpen(false)}>Cancelar</Button>
-                                        <Button onClick={handleCriarToken} className="bg-amber-600 hover:bg-amber-700">
-                                            <Key className="w-4 h-4 mr-2" />
-                                            Gerar Token
-                                        </Button>
-                                    </DialogFooter>
                                 </div>
-                            )}
-                        </DialogContent>
-                    </Dialog>
-                </CardHeader>
-                <CardContent>
-                    <div className="flex items-center gap-4 mb-4">
-                        <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-100 dark:bg-amber-900/30 rounded-full">
-                            <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                            <span className="text-sm font-medium text-amber-800 dark:text-amber-400">
-                                {tokensAtivos.length} token{tokensAtivos.length !== 1 ? 's' : ''} ativo{tokensAtivos.length !== 1 ? 's' : ''}
-                            </span>
+                                <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate">{prod.nome}</p>
+                                </div>
+                                <span className="text-[11px] text-slate-500 font-medium shrink-0">{prod.qtd} un.</span>
+                                <span className="text-xs font-bold text-slate-900 dark:text-white shrink-0">{formatarMoeda(prod.valor)}</span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+
+                {/* 2. Recebimentos vs Pagamentos */}
+                <div className="bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Recebimentos vs Pagamentos
+                        </h3>
+                        <Select value={filtroRecPag} onValueChange={setFiltroRecPag}>
+                            <SelectTrigger className="h-7 text-[11px] px-2.5 rounded-lg border-slate-200 bg-slate-50 dark:bg-neutral-800 w-28">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="mes">Este mês</SelectItem>
+                            </SelectContent>
+                        </Select>
+                    </div>
+
+                    <div className="flex items-center gap-4 text-[10px] text-slate-500 mb-1">
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-2.5 h-2.5 rounded-xs bg-[#189851]" />
+                            <span>Recebimentos</span>
                         </div>
-                        <div className="flex items-center gap-2 ml-auto">
-                            <Switch
-                                id="mostrar-expirados"
-                                checked={mostrarExpirados}
-                                onCheckedChange={setMostrarExpirados}
-                            />
-                            <Label htmlFor="mostrar-expirados" className="text-sm text-gray-600 cursor-pointer">
-                                Exibir tokens expirados
-                            </Label>
+                        <div className="flex items-center gap-1.5">
+                            <div className="w-2.5 h-2.5 rounded-xs bg-[#ef4444]" />
+                            <span>Pagamentos</span>
                         </div>
                     </div>
 
-                    {tokensExibidos.length > 0 ? (
-                        <div className="space-y-2 max-h-[300px] overflow-y-auto">
-                            {tokensExibidos.map(token => {
-                                const expirado = token.expira_em && new Date(token.expira_em) < new Date();
-                                const esgotado = token.max_usos && token.usos_realizados >= token.max_usos;
-                                const ativo = token.ativo && !expirado && !esgotado;
+                    <div className="h-[140px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={chartRecebimentosVsPagamentos.semanas} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <YAxis tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false} />
+                                <Tooltip formatter={(v) => [formatarMoeda(v), '']} />
+                                <Bar dataKey="recebimentos" name="Recebimentos" fill="#189851" radius={[3, 3, 0, 0]} maxBarSize={14} />
+                                <Bar dataKey="pagamentos" name="Pagamentos" fill="#ef4444" radius={[3, 3, 0, 0]} maxBarSize={14} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
 
-                                return (
-                                    <div
-                                        key={token.id}
-                                        className={`flex items-center justify-between p-3 rounded-lg border ${ativo
-                                            ? 'bg-white dark:bg-neutral-800 border-amber-200 dark:border-amber-800'
-                                            : 'bg-gray-50 dark:bg-neutral-900 border-gray-200 dark:border-neutral-700 opacity-60'
-                                            }`}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className={`p-2 rounded-lg ${token.tipo_token === 'SUPERVISOR_MODE' ? 'bg-purple-100 dark:bg-purple-900/40' : 'bg-blue-100 dark:bg-blue-900/40'}`}>
-                                                {token.tipo_token === 'SUPERVISOR_MODE' ? (
-                                                    <span className="text-lg">👑</span>
-                                                ) : (
-                                                    <span className="text-lg">🎫</span>
-                                                )}
-                                            </div>
-                                            <div>
-                                                <div className="flex items-center gap-2">
-                                                    <code className="font-mono font-bold text-lg">{token.codigo}</code>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="sm"
-                                                        className="h-6 w-6 p-0"
-                                                        onClick={() => copiarCodigo(token.codigo)}
-                                                    >
-                                                        {copiado === token.codigo ? (
-                                                            <Check className="w-3 h-3 text-green-600" />
-                                                        ) : (
-                                                            <Copy className="w-3 h-3" />
-                                                        )}
-                                                    </Button>
-                                                </div>
-                                                <div className="flex gap-2 mt-1">
-                                                    <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${token.tipo_token === 'SUPERVISOR_MODE' ? 'bg-purple-50 text-purple-700 border-purple-200' : 'bg-blue-50 text-blue-700 border-blue-200'}`}>
-                                                        {token.tipo_token === 'SUPERVISOR_MODE' ? 'Supervisor' : 'Uso Único'}
-                                                    </Badge>
-                                                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
-                                                        {token.permissao === 'DESCONTO' && 'Desc.'}
-                                                        {token.permissao === 'CANCELAMENTO' && '❌ Canc.'}
-                                                        {token.permissao === 'ALTERACAO_PRECO' && '✏️ Preço'}
-                                                        {token.permissao === 'SUPER_CAIXA' && '⭐ Super'}
-                                                    </Badge>
-                                                    {token.valor_limite && (
-                                                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-50 text-amber-700 border-amber-200">
-                                                            Até {token.valor_limite}%
-                                                        </Badge>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        </div>
+                    <div className="grid grid-cols-2 gap-2 pt-3 border-t border-slate-50 dark:border-neutral-800">
+                        <div>
+                            <p className="text-[10px] text-slate-400">Total Recebimentos</p>
+                            <p className="text-xs font-bold text-emerald-600">{formatarMoeda(chartRecebimentosVsPagamentos.totalRec)}</p>
+                        </div>
+                        <div>
+                            <p className="text-[10px] text-slate-400">Total Pagamentos</p>
+                            <p className="text-xs font-bold text-rose-600">{formatarMoeda(chartRecebimentosVsPagamentos.totalPag)}</p>
+                        </div>
+                    </div>
+                </div>
 
-                                        <div className="flex items-center gap-4">
-                                            <div className="text-right text-xs">
-                                                <div className="flex items-center gap-1 text-gray-500">
-                                                    <span>{token.usos_realizados}/{token.max_usos || '∞'} usos</span>
-                                                </div>
-                                                {token.expira_em && (
-                                                    <div className={`flex items-center gap-1 ${expirado ? 'text-red-500' : 'text-gray-500'}`}>
-                                                        <Clock className="w-3 h-3" />
-                                                        <span>{expirado ? 'Expirado' : new Date(token.expira_em).toLocaleString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                                                    </div>
-                                                )}
-                                            </div>
+                {/* 3. Estoque - Situação */}
+                <div className="bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Estoque - Situação
+                        </h3>
+                    </div>
 
-                                            {!expirado && !esgotado && token.ativo && (
-                                                <Badge className="bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400">
-                                                    Ativo
-                                                </Badge>
-                                            )}
-                                            {expirado && <Badge variant="destructive">Expirado</Badge>}
-                                            {esgotado && !expirado && <Badge className="bg-gray-200 text-gray-600">Esgotado</Badge>}
-                                            {!token.ativo && !expirado && !esgotado && <Badge variant="secondary">Revogado</Badge>}
-
-                                            {ativo && (
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
-                                                    className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
-                                                    onClick={() => revogarToken.mutate(token.id)}
-                                                    title="Revogar token"
-                                                >
-                                                    <Ban className="w-4 h-4" />
-                                                </Button>
-                                            )}
-                                        </div>
+                    <div className="flex items-center justify-between h-[160px]">
+                        <div className="w-[50%] space-y-1.5 text-[11px]">
+                            {estoqueSituacao.donutData.map((item, idx) => (
+                                <div key={idx} className="flex items-center justify-between">
+                                    <div className="flex items-center gap-1.5">
+                                        <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+                                        <span className="text-slate-600 dark:text-slate-400 text-[11px]">{item.name}</span>
                                     </div>
-                                );
-                            })}
+                                    <span className="font-semibold text-slate-800 dark:text-slate-200 text-[11px]">
+                                        {item.value} <span className="text-slate-400 font-normal text-[10px]">({item.pct}%)</span>
+                                    </span>
+                                </div>
+                            ))}
                         </div>
-                    ) : (
-                        <div className="text-center py-8 text-gray-500">
-                            <Key className="w-10 h-10 mx-auto mb-2 opacity-20" />
-                            <p>Nenhum token criado ainda</p>
-                            <p className="text-xs mt-1">Crie um token para autorizar descontos especiais</p>
+
+                        <div className="relative w-[50%] h-full flex items-center justify-center">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <PieChart>
+                                    <Pie
+                                        data={estoqueSituacao.donutData}
+                                        innerRadius={38}
+                                        outerRadius={58}
+                                        paddingAngle={3}
+                                        dataKey="value"
+                                    >
+                                        {estoqueSituacao.donutData.map((entry, index) => (
+                                            <Cell key={`cell-${index}`} fill={entry.color} />
+                                        ))}
+                                    </Pie>
+                                    <Tooltip formatter={(value, name) => [`${value} itens`, name]} />
+                                </PieChart>
+                            </ResponsiveContainer>
+                            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                                <span className="text-[9px] text-slate-400 font-medium uppercase">Total</span>
+                                <span className="text-sm font-extrabold text-slate-800 dark:text-white leading-tight">{estoqueSituacao.totalProdutos}</span>
+                                <span className="text-[8px] text-slate-400">produtos</span>
+                            </div>
                         </div>
-                    )}
-                </CardContent>
-                </Card>
+                    </div>
 
-                {/* Margem Negociável por Loja */}
-                <Card className="border-green-200 bg-gradient-to-br from-green-50 to-emerald-50 dark:from-green-950/20 dark:to-emerald-950/20">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <Percent className="w-5 h-5 text-green-600" />
-                            Margem Negociável por Loja
-                        </CardTitle>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                            Defina a % máxima de desconto que os vendedores podem aplicar livremente no PDV, sem precisar de token.
-                        </p>
-                    </CardHeader>
-                    <CardContent>
-                        {lojasGerenciadas.length === 0 ? (
-                            <div className="text-center py-6 text-gray-500">
-                                <Store className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                                <p className="text-sm">Nenhuma loja encontrada</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-3">
-                                {lojasGerenciadas.map(loja => (
-                                    <MargemLojaRow
-                                        key={loja.id}
-                                        loja={loja}
-                                        salvando={!!margemSalvando[loja.id]}
-                                        onSave={async (novaMargemPercent) => {
-                                            setMargemSalvando(prev => ({ ...prev, [loja.id]: true }));
-                                            try {
-                                                await base44.entities.Loja.update(loja.id, { margem_negociavel: novaMargemPercent });
-                                                queryClient.invalidateQueries({ queryKey: ['lojas-ativas'] });
-                                                queryClient.invalidateQueries({ queryKey: ['lojas'] });
-                                                toast.success(`Margem negociável de ${loja.nome} atualizada para ${novaMargemPercent}%`);
-                                            } catch (err) {
-                                                console.error('Erro ao salvar margem:', err);
-                                                toast.error('Erro ao salvar margem negociável');
-                                            } finally {
-                                                setMargemSalvando(prev => ({ ...prev, [loja.id]: false }));
-                                            }
-                                        }}
-                                    />
-                                ))}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Desconto por Produto */}
-                <Card className="border-blue-200 bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-950/20 dark:to-indigo-950/20">
-                    <CardHeader className="pb-2">
-                        <CardTitle className="text-lg flex items-center gap-2">
-                            <Tag className="w-5 h-5 text-blue-600" />
-                            Desconto por Produto
-                        </CardTitle>
-                        <p className="text-sm text-gray-600 dark:text-gray-400">
-                            Permita que vendedores apliquem desconto individual por item no carrinho. Configure o limite máximo e adicione exceções (produtos ou categorias que não podem ser descontados).
-                        </p>
-                    </CardHeader>
-                    <CardContent>
-                        {lojasGerenciadas.length === 0 ? (
-                            <div className="text-center py-6 text-gray-500">
-                                <Store className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                                <p className="text-sm">Nenhuma loja encontrada</p>
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                {lojasGerenciadas.map(loja => {
-                                    const categoriasDaLoja = [...new Set(produtos.map(p => p.categoria).filter(Boolean))].sort();
-                                    return (
-                                        <DescontoProdutoLojaRow
-                                            key={loja.id}
-                                            loja={loja}
-                                            salvando={!!descontoProdutoSalvando[loja.id]}
-                                            excecoes={descontoExcecoes}
-                                            produtos={produtos}
-                                            categorias={categoriasDaLoja}
-                                            onSave={async ({ ativo, maxPercent }) => {
-                                                setDescontoProdutoSalvando(prev => ({ ...prev, [loja.id]: true }));
-                                                try {
-                                                    await base44.entities.Loja.update(loja.id, {
-                                                        desconto_produto_ativo: ativo,
-                                                        desconto_produto_max_percent: maxPercent
-                                                    });
-                                                    queryClient.invalidateQueries({ queryKey: ['lojas-ativas'] });
-                                                    queryClient.invalidateQueries({ queryKey: ['lojas'] });
-                                                    toast.success(`Desconto por produto de ${loja.nome} salvo!`);
-                                                } catch (err) {
-                                                    console.error('Erro ao salvar desconto por produto:', err);
-                                                    toast.error('Erro ao salvar configuração');
-                                                } finally {
-                                                    setDescontoProdutoSalvando(prev => ({ ...prev, [loja.id]: false }));
-                                                }
-                                            }}
-                                            onAddExcecao={async (dados) => {
-                                                try {
-                                                    await base44.entities.DescontoProdutoExcecao.create(dados);
-                                                    refetchDescontoExcecoes();
-                                                    toast.success('Exceção adicionada!');
-                                                } catch (err) {
-                                                    console.error('Erro ao adicionar exceção:', err);
-                                                    toast.error('Erro ao adicionar exceção');
-                                                }
-                                            }}
-                                            onRemoveExcecao={async (id) => {
-                                                try {
-                                                    await base44.entities.DescontoProdutoExcecao.delete(id);
-                                                    refetchDescontoExcecoes();
-                                                    toast.success('Exceção removida!');
-                                                } catch (err) {
-                                                    console.error('Erro ao remover exceção:', err);
-                                                    toast.error('Erro ao remover exceção');
-                                                }
-                                            }}
-                                        />
-                                    );
-                                })}
-                            </div>
-                        )}
-                    </CardContent>
-                </Card>
-
-                {/* Solicitações de Cadastro e Aprovação de Preços */}
-                <div className={`grid grid-cols-1 ${isGerenteGeral && getSolicitacoesPrecoPendentes.length > 0 ? 'xl:grid-cols-2' : ''} gap-6`}>
-                {isGerenteGeral && (
-                    <SolicitacoesCadastroWidget />
-                )}
-
-                {/* Tabela de Aprovação de Preços */}
-                {getSolicitacoesPrecoPendentes.length > 0 && (
-                    <Card className="border-orange-200 self-start">
-                        <CardHeader className="bg-orange-50 pb-4 border-b border-orange-100">
-                            <div className="flex items-center justify-between">
-                                <CardTitle className="text-orange-800 flex items-center gap-2">
-                                    <AlertCircle className="w-5 h-5" />
-                                    Aprovação de Preços ({getSolicitacoesPrecoPendentes.length})
-                                </CardTitle>
-                            </div>
-                            <p className="text-sm text-orange-600">Produtos sem preço aguardando sua autorização</p>
-                        </CardHeader>
-                        <CardContent className="p-0 overflow-x-auto">
-                            <Table>
-                                <TableHeader>
-                                    <TableRow className="bg-orange-50/50">
-                                        <TableHead>Data</TableHead>
-                                        <TableHead>Vendedor</TableHead>
-                                        <TableHead>Produto</TableHead>
-                                        <TableHead className="text-right">Sugerido</TableHead>
-                                        <TableHead className="text-right">Ação</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {getSolicitacoesPrecoPendentes.map(s => (
-                                        <TableRow key={s.id} className="hover:bg-orange-50/30">
-                                            <TableCell className="text-sm whitespace-nowrap">
-                                                {new Date(s.data_solicitacao).toLocaleString('pt-BR')}
-                                            </TableCell>
-                                            <TableCell className="font-medium text-sm">
-                                                {s.vendedor_nome}
-                                                {lojaAtiva === 'todas' && (
-                                                    <div className="text-xs text-gray-400">{s.loja}</div>
-                                                )}
-                                            </TableCell>
-                                            <TableCell className="text-sm">{s.produto_nome}</TableCell>
-                                            <TableCell className="font-bold text-lg text-green-700 text-right">
-                                                R$ {Number(s.preco_sugerido).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
-                                            </TableCell>
-                                            <TableCell className="text-right">
-                                                <div className="flex items-center justify-end gap-2">
-                                                    <Button
-                                                        size="sm"
-                                                        className="bg-green-600 hover:bg-green-700"
-                                                        onClick={() => responderSolicitacaoPreco.mutate({ id: s.id, status: 'aprovado', precoValido: s.preco_sugerido, produtoId: s.produto_id })}
-                                                        disabled={responderSolicitacaoPreco.isPending}
-                                                    >
-                                                        Aprovar
-                                                    </Button>
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        className="border-amber-600 text-amber-600 hover:bg-amber-50"
-                                                        onClick={() => {
-                                                            setSelectedPriceRequest(s);
-                                                            setNewPrice(Number(s.preco_sugerido).toLocaleString('pt-BR', { minimumFractionDigits: 2 }));
-                                                            setPriceModalOpen(true);
-                                                        }}
-                                                        disabled={responderSolicitacaoPreco.isPending}
-                                                    >
-                                                        Editar e Aprovar
-                                                    </Button>
-                                                </div>
-                                            </TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </CardContent>
-                    </Card>
-                )}
+                    <Link to="/admin/Estoque" className="pt-3 border-t border-slate-50 dark:border-neutral-800 text-[11px] text-emerald-600 hover:text-emerald-700 font-semibold flex items-center justify-center gap-1">
+                        <span>Ver controle de estoque</span>
+                        <ArrowRight className="w-3 h-3" />
+                    </Link>
                 </div>
             </div>
+
+            {/* ================================================================= */}
+            {/* LINHA 3: ACOMPANHAMENTO DE ENTREGAS & ATIVIDADES RECENTES        */}
+            {/* ================================================================= */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {/* 1. Tabela de Acompanhamento de entregas */}
+                <div className="lg:col-span-7 bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                        <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                                Acompanhamento de entregas
+                            </h3>
+                        </div>
+
+                        <div className="flex items-center gap-2 flex-1 max-w-xs sm:justify-end">
+                            <div className="relative w-full max-w-[200px]">
+                                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                                <input
+                                    type="text"
+                                    placeholder="Buscar pedido ou nome..."
+                                    value={buscaEntrega}
+                                    onChange={(e) => setBuscaEntrega(e.target.value)}
+                                    className="w-full pl-8 pr-6 py-1 text-xs bg-slate-50 dark:bg-neutral-800 border border-slate-200 dark:border-neutral-700 rounded-xl focus:outline-none focus:ring-1 focus:ring-emerald-500 text-slate-900 dark:text-white placeholder:text-slate-400"
+                                />
+                                {buscaEntrega && (
+                                    <button
+                                        onClick={() => setBuscaEntrega('')}
+                                        className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs font-bold"
+                                    >
+                                        ×
+                                    </button>
+                                )}
+                            </div>
+                            <Link to="/admin/LogisticaSemanal" className="text-[11px] text-emerald-600 hover:text-emerald-700 font-medium shrink-0">
+                                Ver todas
+                            </Link>
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                            <thead>
+                                <tr className="border-b border-slate-100 dark:border-neutral-800 text-slate-400 font-medium">
+                                    <th className="pb-2.5 font-medium pr-3 whitespace-nowrap">Pedido</th>
+                                    <th className="pb-2.5 font-medium pr-3 whitespace-nowrap">Cliente</th>
+                                    <th className="pb-2.5 font-medium pr-3 max-w-[200px]">Cidade / Bairro</th>
+                                    <th className="pb-2.5 font-medium px-2 whitespace-nowrap">Status</th>
+                                    <th className="pb-2.5 font-medium px-2 whitespace-nowrap">Previsão</th>
+                                    <th className="pb-2.5 font-medium px-2 whitespace-nowrap">Motorista</th>
+                                    <th className="pb-2.5 font-medium text-right pl-2 whitespace-nowrap">Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-50 dark:divide-neutral-800/60">
+                                {entregasRecentesTabela.length === 0 ? (
+                                    <tr>
+                                        <td colSpan={7} className="py-8 text-center text-slate-400 text-xs">
+                                            Nenhuma entrega registrada ou agendada
+                                        </td>
+                                    </tr>
+                                ) : (
+                                    entregasRecentesTabela.map((row) => (
+                                        <tr key={row.id} className="hover:bg-slate-50/60 dark:hover:bg-neutral-800/30 transition-colors">
+                                            <td className="py-3 pr-3 font-semibold text-slate-900 dark:text-white whitespace-nowrap">
+                                                {String(row.pedido).startsWith('#') ? row.pedido : `#${row.pedido}`}
+                                            </td>
+                                            <td className="py-3 pr-3 text-slate-700 dark:text-slate-300 font-medium whitespace-nowrap">{row.cliente}</td>
+                                            <td className="py-3 pr-3 text-slate-500 max-w-[220px] truncate" title={row.cidade}>{row.cidade}</td>
+                                            <td className="py-3 px-2 whitespace-nowrap">
+                                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                                    row.status === 'Em andamento' || row.status === 'Em Rota'
+                                                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-400'
+                                                        : row.status === 'Separação'
+                                                            ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400'
+                                                            : row.status === 'Entregue'
+                                                                ? 'bg-slate-100 text-slate-700 dark:bg-neutral-800 dark:text-slate-300'
+                                                                : 'bg-blue-100 text-blue-700 dark:bg-blue-950/50 dark:text-blue-400'
+                                                }`}>
+                                                    {row.status}
+                                                </span>
+                                            </td>
+                                            <td className="py-3 px-2 text-slate-600 dark:text-slate-400 font-medium whitespace-nowrap">{row.previsao}</td>
+                                            <td className="py-3 px-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">{row.motorista}</td>
+                                            <td className="py-3 pl-2 text-right whitespace-nowrap">
+                                                <button
+                                                    onClick={() => handleVerDetalhes(row.vendaId)}
+                                                    className="p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-neutral-800 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-colors"
+                                                    title="Ver detalhes da venda"
+                                                >
+                                                    <MoreHorizontal className="w-4 h-4" />
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))
+                                )}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <Link to="/admin/LogisticaSemanal" className="pt-3 border-t border-slate-50 dark:border-neutral-800 text-[11px] text-emerald-600 hover:text-emerald-700 font-semibold flex items-center justify-center gap-1">
+                        <span>Ver todas as entregas</span>
+                        <ArrowRight className="w-3 h-3" />
+                    </Link>
+                </div>
+
+                {/* 2. Atividades recentes */}
+                <div className="lg:col-span-5 bg-white dark:bg-neutral-900 p-5 rounded-2xl border border-slate-100 dark:border-neutral-800 shadow-xs flex flex-col justify-between">
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                            Atividades recentes
+                        </h3>
+                    </div>
+
+                    <div className="space-y-3 flex-1">
+                        {atividadesRecentes.length === 0 ? (
+                            <div className="py-8 text-center text-slate-400 text-xs">
+                                Nenhuma atividade recente registrada
+                            </div>
+                        ) : (
+                            atividadesRecentes.map((item) => (
+                                <div key={item.id} className="flex items-start gap-3 p-1.5 rounded-xl hover:bg-slate-50 dark:hover:bg-neutral-800/40 transition-colors">
+                                    <div className={`w-7 h-7 rounded-xl flex items-center justify-center shrink-0 mt-0.5 ${item.iconColor}`}>
+                                        <item.icon className="w-3.5 h-3.5" />
+                                    </div>
+                                    <div className="min-w-0 flex-1">
+                                        <p className="text-xs font-medium text-slate-800 dark:text-slate-200 line-clamp-1">
+                                            {item.titulo}
+                                        </p>
+                                    </div>
+                                    <span className="text-[10px] text-slate-400 font-medium shrink-0 whitespace-nowrap">
+                                        {item.tempo}
+                                    </span>
+                                </div>
+                            ))
+                        )}
+                    </div>
+
+                    <button
+                        onClick={() => toast.info('Histórico completo de auditoria disponível na Central Analítica.')}
+                        className="pt-3 border-t border-slate-50 dark:border-neutral-800 text-[11px] text-emerald-600 hover:text-emerald-700 font-semibold flex items-center justify-center gap-1"
+                    >
+                        <span>Ver todas as atividades</span>
+                        <ArrowRight className="w-3 h-3" />
+                    </button>
+                </div>
+            </div>
+
+            {getSolicitacoesPrecoPendentes.length > 0 && (
+                <Card className="border-orange-200 bg-orange-50/20">
+                    <CardHeader className="bg-orange-50/80 pb-3 border-b border-orange-100">
+                        <CardTitle className="text-sm font-bold text-orange-800 flex items-center gap-2">
+                            <AlertCircle className="w-4 h-4" />
+                            Aprovação de Preços Pendentes ({getSolicitacoesPrecoPendentes.length})
+                        </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0 overflow-x-auto">
+                        <Table>
+                            <TableHeader>
+                                <TableRow className="bg-orange-50/50 text-xs">
+                                    <TableHead>Data</TableHead>
+                                    <TableHead>Vendedor</TableHead>
+                                    <TableHead>Produto</TableHead>
+                                    <TableHead className="text-right">Sugerido</TableHead>
+                                    <TableHead className="text-right">Ação</TableHead>
+                                </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                                {getSolicitacoesPrecoPendentes.map(s => (
+                                    <TableRow key={s.id} className="text-xs hover:bg-orange-50/30">
+                                        <TableCell className="whitespace-nowrap">{new Date(s.data_solicitacao).toLocaleString('pt-BR')}</TableCell>
+                                        <TableCell className="font-medium">{s.vendedor_nome}</TableCell>
+                                        <TableCell>{s.produto_nome}</TableCell>
+                                        <TableCell className="font-bold text-green-700 text-right">
+                                            R$ {Number(s.preco_sugerido).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                                        </TableCell>
+                                        <TableCell className="text-right">
+                                            <div className="flex items-center justify-end gap-2">
+                                                <Button
+                                                    size="sm"
+                                                    className="bg-green-600 hover:bg-green-700 h-7 text-xs px-2"
+                                                    onClick={() => responderSolicitacaoPreco.mutate({ id: s.id, status: 'aprovado', precoValido: s.preco_sugerido, produtoId: s.produto_id })}
+                                                    disabled={responderSolicitacaoPreco.isPending}
+                                                >
+                                                    Aprovar
+                                                </Button>
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline"
+                                                    className="border-amber-600 text-amber-600 hover:bg-amber-50 h-7 text-xs px-2"
+                                                    onClick={() => {
+                                                        setSelectedPriceRequest(s);
+                                                        setNewPrice(Number(s.preco_sugerido).toLocaleString('pt-BR', { minimumFractionDigits: 2 }));
+                                                        setPriceModalOpen(true);
+                                                    }}
+                                                    disabled={responderSolicitacaoPreco.isPending}
+                                                >
+                                                    Editar
+                                                </Button>
+                                            </div>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    </CardContent>
+                </Card>
+            )}
+
+            {isGerenteGeral && (
+                <div className="mt-4">
+                    <SolicitacoesCadastroWidget />
+                </div>
+            )}
 
             {/* Ações de Vendedores - LOG DE AUDITORIA */}
             <div className="mt-6">
@@ -3932,7 +3254,6 @@ export default function DashboardGerente() {
                                     placeholder="0,00"
                                     value={newPrice}
                                     onChange={(e) => {
-                                        // Allow only numbers and comma
                                         const val = e.target.value.replace(/[^0-9,]/g, '');
                                         setNewPrice(val);
                                     }}
@@ -3973,11 +3294,10 @@ export default function DashboardGerente() {
             </Dialog>
 
             {/* Controle de Montadores Externos - apenas para Gerente Geral/Admin */}
-            {
-                isGerenteGeral && (
-                    <ControleMontadoresWidget />
-                )
-            }
+            {isGerenteGeral && (
+                <ControleMontadoresWidget />
+            )}
+
             {/* Modal de Detalhes do Produto */}
             <ProdutoCadastroCompleto
                 isOpen={produtoModalOpen}
@@ -4012,205 +3332,6 @@ export default function DashboardGerente() {
                         </DialogTitle>
                     </DialogHeader>
 
-                    <Tabs defaultValue="entregas" className="flex-1 overflow-hidden flex flex-col">
-                        <TabsList className="mb-4">
-                            <TabsTrigger value="entregas" className="gap-2">
-                                <Truck className="w-4 h-4" />
-                                Entregas <Badge variant="secondary" className="ml-1">{pendencias.entregas.length}</Badge>
-                            </TabsTrigger>
-                            <TabsTrigger value="montagens" className="gap-2">
-                                <Wrench className="w-4 h-4" />
-                                Montagens <Badge variant="secondary" className="ml-1">{pendencias.montagens.length}</Badge>
-                            </TabsTrigger>
-                            <TabsTrigger value="pagamentos" className="gap-2">
-                                <CreditCard className="w-4 h-4" />
-                                Pagamentos <Badge variant="secondary" className="ml-1">{pendencias.pagamentos.length}</Badge>
-                            </TabsTrigger>
-                            <TabsTrigger value="triagem" className="gap-2">
-                                <ClipboardList className="w-4 h-4" />
-                                Triagem <Badge variant="secondary" className="ml-1">{pendencias.triagem.length}</Badge>
-                            </TabsTrigger>
-                        </TabsList>
-
-                        <TabsContent value="entregas" className="flex-1 overflow-auto">
-                            {pendencias.entregas.length === 0 ? (
-                                <div className="text-center py-12 text-gray-500">
-                                    <Check className="w-12 h-12 mx-auto mb-3 text-green-500" />
-                                    <p>Nenhuma entrega pendente!</p>
-                                </div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Data</TableHead>
-                                            <TableHead>Cliente</TableHead>
-                                            <TableHead>Endereço</TableHead>
-                                            <TableHead>Pendência</TableHead>
-                                            <TableHead>Status</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {pendencias.entregas.map(e => (
-                                            <TableRow 
-                                                key={e.id}
-                                                onClick={() => handleVerDetalhes(e.venda_id)}
-                                                className="cursor-pointer hover:bg-muted/50 transition-colors"
-                                            >
-                                                <TableCell>{e.data_agendada ? parseDateSafe(e.data_agendada).toLocaleDateString('pt-BR') : 'Sem data'}</TableCell>
-                                                <TableCell className="font-medium">{e.cliente_nome}</TableCell>
-                                                <TableCell className="max-w-xs truncate" title={e.endereco}>{e.endereco}</TableCell>
-                                                <TableCell className="text-sm text-amber-700 font-medium">
-                                                    {getEntregaPendenciaMotivo(e, hojeIso)}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge variant={e.status === 'Atrasada' ? 'destructive' : 'outline'}>{e.status}</Badge>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </TabsContent>
-
-                        <TabsContent value="montagens" className="flex-1 overflow-auto">
-                            {pendencias.montagens.length === 0 ? (
-                                <div className="text-center py-12 text-gray-500">
-                                    <Check className="w-12 h-12 mx-auto mb-3 text-green-500" />
-                                    <p>Nenhuma montagem pendente!</p>
-                                </div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Data</TableHead>
-                                            <TableHead>Cliente</TableHead>
-                                            <TableHead>Montador</TableHead>
-                                            <TableHead>Pendência</TableHead>
-                                            <TableHead>Status</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {pendencias.montagens.map(m => (
-                                            <TableRow 
-                                                key={m.id}
-                                                onClick={() => handleVerDetalhes(m.venda_id)}
-                                                className="cursor-pointer hover:bg-muted/50 transition-colors"
-                                            >
-                                                <TableCell>{m.data_agendada ? parseDateSafe(m.data_agendada).toLocaleDateString('pt-BR') : 'Sem data'}</TableCell>
-                                                <TableCell className="font-medium">{m.cliente_nome}</TableCell>
-                                                <TableCell>{m.montador_nome || 'Não atribuído'}</TableCell>
-                                                <TableCell className="text-sm text-amber-700 font-medium">
-                                                    {getMontagemPendenciaMotivo(m, hojeIso)}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <Badge variant={m.status === 'Atrasada' ? 'destructive' : 'outline'}>{m.status}</Badge>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </TabsContent>
-
-                        <TabsContent value="pagamentos" className="flex-1 overflow-auto">
-                            {pendencias.pagamentos.length === 0 ? (
-                                <div className="text-center py-12 text-gray-500">
-                                    <Check className="w-12 h-12 mx-auto mb-3 text-green-500" />
-                                    <p>Nenhum pagamento pendente!</p>
-                                </div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Pedido</TableHead>
-                                            <TableHead>Cliente</TableHead>
-                                            <TableHead>Valor Total</TableHead>
-                                            <TableHead>Restante</TableHead>
-                                            <TableHead>Pendência</TableHead>
-                                            <TableHead className="text-right">Ação</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {pendencias.pagamentos.map(v => (
-                                            <TableRow 
-                                                key={v.id}
-                                                onClick={() => handleVerDetalhes(v.id)}
-                                                className="cursor-pointer hover:bg-muted/50 transition-colors"
-                                            >
-                                                <TableCell className="font-bold">#{v.numero_pedido || v.id}</TableCell>
-                                                <TableCell>{v.cliente_nome}</TableCell>
-                                                <TableCell>{formatarMoeda(v.valor_total)}</TableCell>
-                                                <TableCell className="text-red-600 font-bold">{formatarMoeda(v.valor_restante)}</TableCell>
-                                                <TableCell className="text-sm">
-                                                    {v.pagamento_restante_entrega ? (
-                                                        <Badge variant="outline" className="border-amber-600 text-amber-700 bg-amber-50">
-                                                            Pago na entrega {v.forma_pagamento_entrega ? `(${v.forma_pagamento_entrega})` : ''}
-                                                        </Badge>
-                                                    ) : (
-                                                        <Badge variant="outline" className="border-red-400 text-red-600 bg-red-50">
-                                                            Pendente na loja
-                                                        </Badge>
-                                                    )}
-                                                </TableCell>
-                                                <TableCell className="text-right">
-                                                    <Button
-                                                        size="sm"
-                                                        variant="outline"
-                                                        className="text-emerald-700 border-emerald-300 hover:bg-emerald-50 h-8 px-2"
-                                                        onClick={(evt) => {
-                                                            evt.stopPropagation();
-                                                            abrirModalPagamento(v);
-                                                        }}
-                                                    >
-                                                        <CreditCard className="w-4 h-4 mr-1" />
-                                                        Receber
-                                                    </Button>
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </TabsContent>
-
-                        <TabsContent value="triagem" className="flex-1 overflow-auto">
-                            {pendencias.triagem.length === 0 ? (
-                                <div className="text-center py-12 text-gray-500">
-                                    <Check className="w-12 h-12 mx-auto mb-3 text-green-500" />
-                                    <p>Nenhuma venda aguardando triagem!</p>
-                                </div>
-                            ) : (
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Pedido</TableHead>
-                                            <TableHead>Cliente</TableHead>
-                                            <TableHead>Data Venda</TableHead>
-                                            <TableHead>Loja</TableHead>
-                                            <TableHead>Pendência</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {pendencias.triagem.map(v => (
-                                            <TableRow 
-                                                key={v.id}
-                                                onClick={() => handleVerDetalhes(v.id)}
-                                                className="cursor-pointer hover:bg-muted/50 transition-colors"
-                                            >
-                                                <TableCell className="font-bold">#{v.numero_pedido || v.id}</TableCell>
-                                                <TableCell>{v.cliente_nome}</TableCell>
-                                                <TableCell>{v.data_venda ? parseDateSafe(v.data_venda).toLocaleDateString('pt-BR') : '-'}</TableCell>
-                                                <TableCell>{v.loja}</TableCell>
-                                                <TableCell className="text-sm text-amber-700 font-medium">
-                                                    Aguardando triagem logística
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            )}
-                        </TabsContent>
-                    </Tabs>
                     <DialogFooter className="mt-4">
                         <Button variant="outline" onClick={() => setPendenciasModalOpen(false)}>Fechar</Button>
                     </DialogFooter>

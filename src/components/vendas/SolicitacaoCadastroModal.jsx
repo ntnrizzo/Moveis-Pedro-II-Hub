@@ -12,6 +12,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CATEGORIAS, AMBIENTES, MATERIAIS } from "@/constants/productConstants";
 import FurnitureColorPicker from "@/components/produtos/FurnitureColorPicker";
 import { detectProductKeywordSuggestion } from "@/lib/productKeywordDetector";
+import { generateSafeSKU } from "@/utils/gtinValidator";
 
 export default function SolicitacaoCadastroModal({ isOpen, onClose, onProdutoSolicitado, user, initialParentProduct = null }) {
     const [loading, setLoading] = useState(false);
@@ -128,7 +129,8 @@ export default function SolicitacaoCadastroModal({ isOpen, onClose, onProdutoSol
 
             // 2. Criar produto real na base (pendente revisao pelo gerente)
             const novoProduto = await base44.entities.Produto.create({
-                codigo_barras: `SOL-${Date.now()}`,
+                sku: generateSafeSKU('SOL'),
+                codigo_barras: null,
                 nome: formData.nome_produto,
                 categoria: formData.categoria,
                 ambiente: formData.ambiente || null,

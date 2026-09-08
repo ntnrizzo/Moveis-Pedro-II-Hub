@@ -97,7 +97,9 @@ export default function BuscaGlobal({ open, onClose }) {
             item.email?.toLowerCase().includes(termo);
         case 'produtos':
           return item.nome?.toLowerCase().includes(termo) ||
+            item.sku?.toLowerCase().includes(termo) ||
             item.codigo_barras?.includes(termo) ||
+            item.modelo_referencia?.toLowerCase().includes(termo) ||
             item.categoria?.toLowerCase().includes(termo);
         case 'orcamentos':
           return item.numero_orcamento?.toLowerCase().includes(termo) ||
@@ -147,7 +149,7 @@ export default function BuscaGlobal({ open, onClose }) {
   const navegarPara = (tipo, item) => {
     switch (tipo) {
       case 'vendas':
-        navigate('/Vendas');
+        navigate('/admin/Pedidos');
         break;
       case 'clientes':
         navigate('/Clientes');
@@ -184,7 +186,7 @@ export default function BuscaGlobal({ open, onClose }) {
           <div className="flex items-center gap-3">
             <Search className="w-5 h-5 text-gray-400" />
             <Input
-              placeholder="Buscar em vendas, clientes, produtos, orçamentos..."
+              placeholder="Buscar em pedidos, clientes, produtos, orçamentos..."
               value={termoBusca}
               onChange={(e) => setTermoBusca(e.target.value)}
               className="flex-1 border-0 focus-visible:ring-0 text-lg"
@@ -212,7 +214,7 @@ export default function BuscaGlobal({ open, onClose }) {
               <Search className="w-12 h-12 text-gray-300 mx-auto mb-4" />
               <p className="text-gray-500">Digite pelo menos 2 caracteres para buscar</p>
               <div className="mt-6 flex flex-wrap gap-2 justify-center">
-                <Badge variant="outline">Vendas</Badge>
+                <Badge variant="outline">Pedidos</Badge>
                 <Badge variant="outline">Clientes</Badge>
                 <Badge variant="outline">Produtos</Badge>
                 <Badge variant="outline">Orçamentos</Badge>
@@ -236,7 +238,7 @@ export default function BuscaGlobal({ open, onClose }) {
                 {vendasFiltradas.length > 0 && (
                   <TabsTrigger value="vendas">
                     <ShoppingCart className="w-4 h-4 mr-1" />
-                    Vendas ({vendasFiltradas.length})
+                    Pedidos ({vendasFiltradas.length})
                   </TabsTrigger>
                 )}
                 {clientesFiltrados.length > 0 && (
@@ -268,7 +270,7 @@ export default function BuscaGlobal({ open, onClose }) {
               <TabsContent value="todos" className="space-y-4">
                 {vendasFiltradas.length > 0 && (
                   <ResultadosBusca
-                    titulo="Vendas"
+                    titulo="Pedidos"
                     icon={ShoppingCart}
                     dados={vendasFiltradas.slice(0, 5)}
                     tipo="vendas"
@@ -320,7 +322,7 @@ export default function BuscaGlobal({ open, onClose }) {
 
               <TabsContent value="vendas">
                 <ResultadosBusca
-                  titulo="Vendas"
+                  titulo="Pedidos"
                   icon={ShoppingCart}
                   dados={vendasFiltradas}
                   tipo="vendas"

@@ -1,3 +1,5 @@
+import { supabase } from '@/lib/supabase';
+import { identityKey } from '@/utils/identityStorage';
 import React from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -76,7 +78,10 @@ export default function OrcamentoCard({ orcamento, onEdit, onDelete }) {
       // Marcar o orçamento como Convertido para impedir dupla conversão
       await base44.entities.Orcamento.update(orcamentoFull.id, { status: 'Convertido' });
       queryClient.invalidateQueries({ queryKey: ['orcamentos'] });
-      sessionStorage.setItem('moveispedroii_pdv_state', JSON.stringify(pdvState));
+      const { data: { session: pdvSession } } = await supabase.auth.getSession();
+            const { data: pdvProfile, error: pdvProfileError } = await supabase.from('public_users').select('organization_id').eq('id', pdvSession?.user?.id).single();
+            if (pdvProfileError || !pdvProfile?.organization_id) throw new Error('Organização indisponível');
+            sessionStorage.setItem(identityKey('moveispedroii_pdv_state', pdvProfile.organization_id, pdvSession.user.id), JSON.stringify(pdvState));
       // Disparar evento customizado para o PDV detectar (SPA)
       window.dispatchEvent(new Event('orcamento-para-pdv'));
       navigate(createPageUrl("PDV"));

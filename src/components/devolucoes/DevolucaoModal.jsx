@@ -30,8 +30,176 @@ import {
   PAYMENT_METHOD_OPTIONS_DELIVERY,
 } from "@/services/paymentOrchestrator";
 
-export default function DevolucaoModal({ isOpen, onClose, onSave, devolucao, vendas, produtos, isLoading }) {
+export default function DevolucaoModal({ isOpen, onClose, onSave, devolucao, devolucoes = [], vendas = [], produtos = [], fornecedores = [], isLoading }) {
 const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
+
+  const { user } = useAuth();
+  const { data: lojasData = [] } = useLojas();
+  const submitLockRef = useRef(false);
+
+  const createInitialFormData = () => ({
+    venda_id: "",
+    numero_pedido: "",
+    cliente_nome: "",
+    data_devolucao: new Date().toISOString().split('T')[0],
+    tipo: "Devolução",
+    itens_devolvidos: [],
+    itens_troca: [],
+    valor_devolvido: 0,
+    valor_diferenca: 0,
+    status: "Pendente",
+    observacoes: "",
+    destino_estoque: "",
+    destino_troco: "",
+    justificativa_financeira: "",
+    forma_pagamento_diferenca: "",
+    pagamento_diferenca_parcelas: 1,
+    pagamento_diferenca_valor: 0,
+    pagamento_diferenca_ativo: false,
+    pagamentos_diferenca: [],
+    organization_id: user?.organization_id || null,
+  });
+
+  const [formData, setFormData] = useState(createInitialFormData());
+  const [vendaSelecionada, setVendaSelecionada] = useState(null);
+  const [entregue, setEntregue] = useState(false);
+  const [verificandoEntrega, setVerificandoEntrega] = useState(false);
+  const [canApprove, setCanApprove] = useState(false);
+  const [isApproving, setIsApproving] = useState(false);
+  const [valorEditadoManual, setValorEditadoManual] = useState(false);
+  const [produtoTrocaSelecionadoId, setProdutoTrocaSelecionadoId] = useState("");
+  const [quantidadeTrocaInput, setQuantidadeTrocaInput] = useState(1);
+  const [buscaVenda, setBuscaVenda] = useState("");
+  const [openVendaBusca, setOpenVendaBusca] = useState(false);
+  const [novoPagamentoDiferenca, setNovoPagamentoDiferenca] = useState({ forma: "", valor: "", parcelas: 1 });
+
+  // Estados para PainelPagamento na Devolução
+  const [descontoDiferenca, setDescontoDiferenca] = useState(0);
+  const [observacoesDiferenca, setObservacoesDiferenca] = useState("");
+  const [pagamentoEntregaDiferenca, setPagamentoEntregaDiferenca] = useState({ ativo: false, valor: 0, forma: '', parcelas: 1 });
+  const [cupomAplicadoDiferenca, setCupomAplicadoDiferenca] = useState(null);
+  const [tokenGerencialDiferenca, setTokenGerencialDiferenca] = useState(null);
+  const [margemDescontoDiferenca, setMargemDescontoDiferenca] = useState(0);
+
+  // Permissões de aprovação baseadas no role do usuário
+  useEffect(() => {
+    const cargo = user?.cargo || user?.role || '';
+    setCanApprove(cargo === 'Administrador' || cargo === 'Gerente' || cargo === 'admin' || cargo === 'manager');
+  }, [user]);
+
+  // Lojas disponíveis como destino de estoque
+  const lojasDestino = useMemo(() => {
+    return lojasData.map(l => l.nome).filter(Boolean);
+  }, [lojasData]);
+
+  // Vendas disponíveis para seleção (apenas com status de entregue ou finalizadas)
+  const vendasParaSelecao = useMemo(() => {
+    return (vendas || []).filter(v =>
+      v.status === 'Entregue' ||
+      v.status === 'Finalizada' ||
+      v.status === 'Pago' ||
+      v.status === 'Aprovada'
+    );
+  }, [vendas]);
+
+  // Filtragem das vendas baseada na busca digitada
+  const vendasFiltradasBusca = useMemo(() => {
+    const termo = String(buscaVenda || '').trim().toLowerCase();
+    if (termo.length < 2) return [];
+    return (vendas || []).filter(v =>
+      String(v.numero_pedido || '').toLowerCase().includes(termo) ||
+      String(v.cliente_nome || '').toLowerCase().includes(termo)
+    ).slice(0, 20);
+  }, [vendas, buscaVenda]);
+
+  // Itens da venda selecionada
+  const itensVendaSelecionada = useMemo(() => {
+    if (!vendaSelecionada) return [];
+    return Array.isArray(vendaSelecionada.itens)
+      ? vendaSelecionada.itens
+      : Array.isArray(vendaSelecionada.itens_venda)
+        ? vendaSelecionada.itens_venda
+        : [];
+  }, [vendaSelecionada]);
+
+  // Produtos disponíveis para troca (com estoque > 0)
+  const getEstoqueDisponivelProduto = (produto) => {
+    if (!produto) return 0;
+
+    const estoqueCampos = Object.entries(produto)
+      .filter(([key, value]) => key.startsWith('estoque_') && typeof value !== 'object')
+      .map(([, value]) => Number(value || 0))
+      .filter((value) => Number.isFinite(value));
+
+    const estoquePrincipal = Number(produto.quantidade_estoque || 0);
+    const estoqueBase = estoqueCampos.length > 0
+      ? Math.max(estoquePrincipal, ...estoqueCampos)
+      : estoquePrincipal;
+    const reservado = Number(produto.quantidade_reservada || 0);
+
+    return Math.max(0, estoqueBase - reservado);
+  };
+
+  // Produtos disponíveis para troca
+  const produtosTrocaDisponiveis = useMemo(() => {
+    return (produtos || [])
+      .filter((p) => p.ativo !== false)
+      .sort((a, b) => String(a.nome || '').localeCompare(String(b.nome || ''), 'pt-BR', { sensitivity: 'base' }));
+  }, [produtos]);
+
+  // Valor da diferença da troca (derivado do formData)
+  const valorDiferenca = Number(formData.valor_diferenca || 0);
+
+  // Pagamentos da diferença (derivado do formData)
+  const pagamentosDiferenca = useMemo(() => {
+    return Array.isArray(formData.pagamentos_diferenca) ? formData.pagamentos_diferenca : [];
+  }, [formData.pagamentos_diferenca]);
+
+  // Validação dos pagamentos da diferença
+  const validacaoPagamentoDiferenca = useMemo(() => {
+    const totalPago = pagamentosDiferenca.reduce((acc, p) => acc + Number(p.valor || 0), 0);
+    const acrescimos = pagamentosDiferenca.reduce((acc, p) => acc + Number(p.acrescimo || 0), 0);
+    const subtotal = valorDiferenca + acrescimos;
+    const total = Math.max(0, subtotal - descontoDiferenca);
+    const pago = totalPago + (pagamentoEntregaDiferenca.ativo ? pagamentoEntregaDiferenca.valor : 0);
+    const restante = Math.max(0, total - pago);
+    
+    const errors = [];
+    if (restante > 0.009) {
+      errors.push(`Faltam R$ ${restante.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} para cobrir a diferença.`);
+    }
+    return {
+      ok: errors.length === 0,
+      totalPago,
+      restante,
+      errors,
+    };
+  }, [pagamentosDiferenca, valorDiferenca, descontoDiferenca, pagamentoEntregaDiferenca]);
+
+  const valoresPainelDiferenca = useMemo(() => {
+    const acrescimos = pagamentosDiferenca.reduce((acc, p) => acc + Number(p.acrescimo || 0), 0);
+    const subtotal = valorDiferenca + acrescimos;
+    const total = Math.max(0, subtotal - descontoDiferenca);
+    const pago = pagamentosDiferenca.reduce((acc, p) => acc + Number(p.valor || 0), 0);
+    const restante = Math.max(0, total - pago);
+    return { subtotal, total, pago, restante };
+  }, [valorDiferenca, descontoDiferenca, pagamentosDiferenca]);
+
+  // Calcula quantidade já devolvida de um produto em outras devoluções da mesma venda
+  const getQuantidadeJaDevolvida = (vendaId, produtoId) => {
+    if (!vendaId || !produtoId) return 0;
+    return (devolucoes || [])
+      .filter(d =>
+        d.venda_id === vendaId &&
+        d.status !== 'Rejeitada' &&
+        (!devolucao || d.id !== devolucao.id)
+      )
+      .reduce((acc, d) => {
+        const itens = Array.isArray(d.itens_devolvidos) ? d.itens_devolvidos : [];
+        const item = itens.find(i => i.produto_id === produtoId);
+        return acc + Number(item?.quantidade || 0);
+      }, 0);
+  };
 
   const getQuantidadeMaximaDevolucao = (item) => {
     const vendida = Number(item?.quantidade || 0);

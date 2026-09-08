@@ -16,12 +16,11 @@ import {
   ChevronDown, ChevronRight, AlertCircle, CheckCircle2, Info
 } from "lucide-react";
 import { toast } from "sonner";
+import { isValidGTIN, normalizeGTIN, generateSafeSKU } from "@/utils/gtinValidator";
 
 export default function ImportarNFe({ user }) {
-  const [activeTab, setActiveTab] = useState("chave");
-  const [chaveAcesso, setChaveAcesso] = useState("");
+  const [activeTab, setActiveTab] = useState("arquivo");
   const [processando, setProcessando] = useState(false);
-  const [consultandoAPI, setConsultandoAPI] = useState(false);
   const [dadosCompletos, setDadosCompletos] = useState(null);
   const [resultado, setResultado] = useState(null);
   const [etapaAtual, setEtapaAtual] = useState("");
@@ -42,14 +41,6 @@ export default function ImportarNFe({ user }) {
     queryFn: () => base44.entities.Produto.list(),
   });
 
-  // ==============================================
-  // SEGURANÇA: Credenciais movidas para Edge Function
-  // Configurar via: supabase secrets set NUVEM_FISCAL_HOMOLOG_ID=xxx
-  // ==============================================
-
-  // Ambiente configurado localmente (apenas seleção, sem credenciais)
-  const AMBIENTE = localStorage.getItem("nfe_ambiente") || "homologacao";
-
   const EMPRESAS = [
     { cnpj: "49129137000130", nome: "Atacadao Outlet", cnpjFormatado: "49.129.137/0001-30" },
     { cnpj: "04842257000141", nome: "Moveis Pedro II", cnpjFormatado: "04.842.257/0001-41" },
@@ -69,30 +60,6 @@ export default function ImportarNFe({ user }) {
   const getTagFloat = (parent, tagName) => {
     const text = getTagText(parent, tagName);
     return text ? parseFloat(text) : 0;
-  };
-
-  // ================================================
-  // NOVA IMPLEMENTAÇÃO: Usa Edge Function (seguro)
-  // ================================================
-  const importarViaEdgeFunction = async (chave, cnpj) => {
-    const { data, error } = await supabase.functions.invoke('importar-nfe', {
-      body: {
-        chave_acesso: chave,
-        cnpj_destinatario: cnpj,
-        ambiente: AMBIENTE
-      }
-    });
-
-    if (error) {
-      console.error("Erro na Edge Function:", error);
-      throw new Error(error.message || 'Erro ao conectar com Edge Function');
-    }
-
-    if (!data.success && data.error) {
-      throw new Error(data.error);
-    }
-
-    return data;
   };
 
   // Parser completo do XML da NFe
@@ -219,8 +186,8 @@ export default function ImportarNFe({ user }) {
       const cofinsGroup = imposto?.getElementsByTagName("COFINS")[0];
       const cofins = cofinsGroup?.children[0];
 
-      let ean = getTagText(prod, "cEAN");
-      if (!ean || ean === "SEM GTIN") ean = null;
+      let rawEan = getTagText(prod, "cEAN");
+      let ean = (rawEan && rawEan !== "SEM GTIN" && isValidGTIN(rawEan)) ? normalizeGTIN(rawEan, true) : null;
 
       itens.push({
         numero_item: parseInt(det.getAttribute("nItem")) || i + 1,
@@ -296,80 +263,7 @@ export default function ImportarNFe({ user }) {
 
   // Buscar nota via Edge Function (SEGURO - sem credenciais no frontend)
   const consultarNotaNaAPI = async () => {
-    const chaveLimpa = chaveAcesso.replace(/\D/g, '');
-
-    if (chaveLimpa.length !== 44) {
-      setResultado({ tipo: 'erro', texto: 'A chave deve ter 44 numeros.' });
-      return;
-    }
-
-    setConsultandoAPI(true);
-    setResultado(null);
-    setDadosCompletos(null);
-    setEtapaAtual("Conectando com servidor...");
-
-    try {
-      // Verificar se a nota ja existe no banco para evitar duplicidade
-      const { data: existente, error: errorCheck } = await supabase
-        .from('nota_fiscal_entrada')
-        .select('id, numero_nota')
-        .eq('chave_acesso', chaveLimpa)
-        .maybeSingle();
-
-      if (errorCheck) console.error("Erro ao verificar duplicidade:", errorCheck);
-      
-      if (existente) {
-        setResultado({ 
-          tipo: 'erro', 
-          texto: `Nota Fiscal #${existente.numero_nota} ja importada anteriormente.` 
-        });
-        setConsultandoAPI(false);
-        setEtapaAtual("");
-        return;
-      }
-
-      setEtapaAtual("Buscando nota na SEFAZ...");
-
-      // Usar Edge Function segura
-      const resposta = await importarViaEdgeFunction(chaveLimpa, cnpjSelecionado);
-
-      if (!resposta.success) {
-        if (resposta.status === 'aguardando' || resposta.status === 'processando') {
-          throw new Error(resposta.error || 'Nota em processamento. Aguarde 1-2 minutos e tente novamente.');
-        }
-        throw new Error(resposta.error || 'Erro ao buscar nota');
-      }
-
-      if (!resposta.xml) {
-        throw new Error('XML não disponível ainda. Tente novamente em alguns segundos.');
-      }
-
-      // Parse completo do XML retornado
-      setEtapaAtual("Processando dados...");
-      const dados = parseXMLCompleto(resposta.xml);
-
-      setDadosCompletos(dados);
-      setResultado({ tipo: 'sucesso', texto: `Nota ${dados.nota.numero_nota} carregada com sucesso!` });
-
-    } catch (error) {
-      console.error("Erro:", error);
-
-      // Melhorar mensagem de erro para o usuário
-      let mensagemErro = error.message;
-      if (error.message.includes('FunctionsFetchError') || error.message.includes('Failed to fetch')) {
-        mensagemErro = 'Edge Functions não deployadas. Execute: supabase functions deploy importar-nfe';
-      } else if (error.message.includes('Credenciais não configuradas')) {
-        mensagemErro = 'Credenciais não configuradas no servidor. Configure via supabase secrets set.';
-      }
-
-      setResultado({ tipo: 'erro', texto: mensagemErro });
-    } finally {
-      setConsultandoAPI(false);
-      setEtapaAtual("");
-    }
-  };
-
-  // Processar importacao completa
+    // Processar importacao completa
   const processarImportacao = async () => {
     if (!dadosCompletos) return;
 
@@ -442,7 +336,7 @@ export default function ImportarNFe({ user }) {
 
         // Buscar por EAN
         let produtoExistente = item.codigo_barras_ean ?
-          produtos.find(p => p.codigo_barras === item.codigo_barras_ean) : null;
+          produtos.find(p => p.codigo_barras && normalizeGTIN(p.codigo_barras, true) === item.codigo_barras_ean) : null;
 
         // Buscar por nome similar
         if (!produtoExistente) {
@@ -469,9 +363,14 @@ export default function ImportarNFe({ user }) {
           produtoVinculado = true;
           produtosAtualizados++;
         } else {
-          // Criar novo produto
+          // Criar novo produto com SKU seguro e EAN válido (ou null)
+          const safeSku = item.codigo_produto_fornecedor
+            ? generateSafeSKU(`NFE-${item.codigo_produto_fornecedor}`.substring(0, 30))
+            : generateSafeSKU('NFE');
+
           const novoProduto = await base44.entities.Produto.create({
             nome: item.descricao_produto,
+            sku: safeSku,
             codigo_barras: item.codigo_barras_ean,
             categoria: "Outros",
             preco_custo: item.valor_unitario,
@@ -603,38 +502,14 @@ export default function ImportarNFe({ user }) {
           {/* Tabs de entrada */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList className="grid w-full grid-cols-2">
-              <TabsTrigger value="chave">
-                <Barcode className="w-4 h-4 mr-2" />
-                Chave de Acesso
-              </TabsTrigger>
+              
               <TabsTrigger value="arquivo">
                 <Upload className="w-4 h-4 mr-2" />
                 Arquivo XML
               </TabsTrigger>
             </TabsList>
 
-            <TabsContent value="chave" className="mt-4">
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <Input
-                    placeholder="Digite os 44 digitos da chave de acesso"
-                    className="font-mono"
-                    value={chaveAcesso}
-                    onChange={(e) => setChaveAcesso(e.target.value.replace(/\D/g, ''))}
-                    maxLength={44}
-                  />
-                  <p className="text-xs text-gray-400 mt-1">{chaveAcesso.length}/44 digitos</p>
-                </div>
-                <Button
-                  onClick={consultarNotaNaAPI}
-                  disabled={consultandoAPI || chaveAcesso.length < 44}
-                  className="bg-green-700 hover:bg-green-800"
-                >
-                  {consultandoAPI ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4 mr-2" />}
-                  Buscar
-                </Button>
-              </div>
-            </TabsContent>
+            
 
             <TabsContent value="arquivo" className="mt-4">
               <label className="cursor-pointer block">

@@ -32,22 +32,41 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { getColorHex } from './FurnitureColorPicker';
-import { sugerirNCMsComIA, aplicarSugestoesNCM } from '@/services/ncmSuggestionService';
 import { detectProductKeywordSuggestion } from '@/lib/productKeywordDetector';
-import { buildUniqueCodigoBarras, buildUniqueModeloReferencia } from '@/utils/importProdutosUtils';
+import {
+    validateImportPlanilha,
+    buildInsertProductPayload,
+    buildUpdateProductPayload,
+    normalizeSkuForComparison,
+    normalizeSkuForStorage
+} from '@/utils/importProdutosUtils';
+import { isValidGTIN, normalizeGTIN } from '@/utils/gtinValidator';
 
-// Template CSV - NOTA: Lojas são carregádas dinamicamente
-const CSV_TEMPLATE_HEADER = `FABRICANTE / FORNECEDOR,DESCRIÇÃO DO PRODUTO,MODELO / REFERÊNCIA,PREÇO DE CUSTO,LARGURA,ALTURA,PROFUNDIDADE,EXTRA,VARIAÇÃO DE CORES,MODELOS DE TECIDOS,ESTOQUE CD`;
+// Template CSV - NOTA: Lojas são carregadas dinamicamente
+const CSV_TEMPLATE_HEADER = `SKU,CÓDIGO DE BARRAS,FABRICANTE / FORNECEDOR,DESCRIÇÃO DO PRODUTO,MODELO / REFERÊNCIA,PREÇO DE CUSTO,LARGURA,ALTURA,PROFUNDIDADE,EXTRA,VARIAÇÃO DE CORES,MODELOS DE TECIDOS,ESTOQUE CD`;
 const CSV_TEMPLATE_FOOTER = `,IMPOSTOS,FRETE,IPI,MARKUP,PREÇO VENDA FINAL,DESCONTOS VENDEDOR,DESCONTOS GERENCIAL,MOVEIS MONTAGEM`;
 
 // Mapeamento BASE de colunas do CSV para campos internos
 // As colunas de estoque por loja são geradas dinamicamente
 const BASE_COLUMN_MAPPING = {
-    // === CÓDIGO ===
-    'codigo': 'codigo_barras',
-    'código': 'codigo_barras',
+    // === SKU / CÓDIGO INTERNO ===
+    'sku': 'sku',
+    'código': 'sku',
+    'codigo': 'sku',
+    'código interno': 'sku',
+    'codigo interno': 'sku',
+
+    // === CÓDIGO DE BARRAS / EAN / GTIN ===
+    'código de barras': 'codigo_barras',
+    'codigo de barras': 'codigo_barras',
     'codigo_barras': 'codigo_barras',
-    'sku': 'codigo_barras',
+    'ean': 'codigo_barras',
+    'gtin': 'codigo_barras',
+
+    // === ID DO PRODUTO (opcional para arquivos exportados pelo próprio sistema) ===
+    'id do produto': 'id',
+    'id produto': 'id',
+    'id': 'id',
 
     // === FABRICANTE / FORNECEDOR (com variações/typos) ===
     'fabricante / fornecedor': 'fornecedor_nome',
@@ -168,11 +187,11 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
     const [step, setStep] = useState(1); // 1: upload, 2: preview, 3: importing, 4: enriching NCM
     const cancelImportRef = React.useRef(false);
     const [produtosExistentes, setProdutosExistentes] = useState(new Map());
+    const [catalogoProdutos, setCatalogoProdutos] = useState([]);
+    const [catalogoError, setCatalogoError] = useState(null);
+    const [validationResult, setValidationResult] = useState(null);
+    const [importSummary, setImportSummary] = useState(null); // { criados, atualizados, ignorados, falharam, falhasDetalhadas }
 
-    // Estados para enriquecimento de NCM via IA
-    const [enrichingNCM, setEnrichingNCM] = useState(false);
-    const [ncmProgress, setNcmProgress] = useState({ current: 0, total: 0, message: '' });
-    const [ncmStats, setNcmStats] = useState(null); // { gemini: N, fallback: N }
 
     // Verificação de permissão estrita para dados financeiros
     const { user } = useAuth();
@@ -184,13 +203,19 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
 
     const normalizeCodigo = useCallback((codigo) => String(codigo || '').trim().toLowerCase(), []);
 
-    // Pré-carrega SKUs/códigos já existentes para evitar consultas por item e pular duplicados
-    // Usa paginação para não perder itens quando a tabela tiver mais de 1000 registros.
+    // Pré-carrega o catálogo existente completo com SKU e GTIN para validação de unicidade e reimportação
     useEffect(() => {
         if (!isOpen) return;
 
         const carregarProdutosExistentes = async () => {
+            if (!organization?.id) {
+                setCatalogoError('Organização não identificada. A importação foi bloqueada por segurança.');
+                return;
+            }
+
             try {
+                setCatalogoError(null);
+                const listaCatalogo = [];
                 const produtosMap = new Map();
                 const pageSize = 1000;
                 let from = 0;
@@ -199,15 +224,16 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                 while (keepFetching) {
                     const { data: produtos, error } = await supabase
                         .from('produtos')
-                        .select('codigo_barras')
-                        .eq('organization_id', organization?.id || '00000000-0000-0000-0000-000000000001')
+                        .select('id, sku, codigo_barras, nome, modelo_referencia, preco_venda, preco_custo, organization_id')
+                        .eq('organization_id', organization.id)
                         .range(from, from + pageSize - 1);
 
                     if (error) throw error;
 
                     (produtos || []).forEach((p) => {
-                        const chave = normalizeCodigo(p.codigo_barras);
-                        if (chave) produtosMap.set(chave, true);
+                        listaCatalogo.push(p);
+                        const chaveSku = normalizeSkuForComparison(p.sku);
+                        if (chaveSku) produtosMap.set(chaveSku, p);
                     });
 
                     if (!produtos || produtos.length < pageSize) {
@@ -217,9 +243,11 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                     }
                 }
 
+                setCatalogoProdutos(listaCatalogo);
                 setProdutosExistentes(produtosMap);
             } catch (error) {
                 console.error('[Import] Erro ao carregar produtos existentes:', error);
+                setCatalogoError('Falha ao carregar catálogo existente da organização: ' + error.message);
             }
         };
 
@@ -266,7 +294,7 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
     // Gera template CSV dinâmico com lojas
     const CSV_TEMPLATE = useMemo(() => {
         const lojasHeaders = lojas.map(l => `ESTOQUE LOJA ${(l?.nome || '').toUpperCase()}`).join(',');
-        return `${CSV_TEMPLATE_HEADER},${lojasHeaders}${CSV_TEMPLATE_FOOTER}\nAltaro,Sofá 3 Lugares,ALT-SF3R,1200,220,95,100,,Cinza,Suede,5${',0'.repeat(lojas.length)},12,150,5,100,2640,5,15,SIM`;
+        return `${CSV_TEMPLATE_HEADER},${lojasHeaders}${CSV_TEMPLATE_FOOTER}\nALT-SF3R-CINZA,7891000315507,Altaro,Sofá 3 Lugares,ALT-SF3R,1200,220,95,100,,Cinza,Suede,5${',0'.repeat(lojas.length)},12,150,5,100,2640,5,15,SIM`;
     }, [lojas]);
 
     const buildVariationToken = (value, fallback = '') => {
@@ -601,7 +629,6 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
             const tecidoRaw = row.modelos_tecidos ? String(row.modelos_tecidos).trim() : '';
 
             // Se tiver vírgula, split em múltiplas variações
-            // NOTA: "/" dentro de um nome (ex: "Branco HP/Nature") NÃO é separador, só vírgula
             const cores = corRaw
                 ? [...new Set(corRaw.split(',').map(c => c.trim()).filter(c => c.length > 0))]
                 : [];
@@ -640,29 +667,29 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                     cor: unica.cor || '',
                     modelos_tecidos: unica.tecido || '',
                     cor_hex: unica.cor ? getColorHex(unica.cor) : null,
-                    id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
                     variacoes: []
                 });
             } else {
-                // Múltiplas variações → duplica o produto para cada variação
+                // Múltiplas variações
+                // NOTA: Se o CSV trouxer um único EAN para múltiplas variações, a pré-validação bloqueará.
+                // Aqui cada variação recebe seu próprio SKU derivado para unicidade, e EAN null.
                 console.log(`[Import] Linha ${row.linha}: Explodindo ${combinacoes.length} variações de "${row.nome}"`);
                 for (const variacao of combinacoes) {
-                    let uniqueCodigoBarras = row.codigo_barras;
-                    if (uniqueCodigoBarras) {
-                        const variationSuffix = buildVariationSuffix(variacao.cor, variacao.tecido);
-                        if (variationSuffix) {
-                            uniqueCodigoBarras = `${uniqueCodigoBarras}-${variationSuffix}`;
-                        }
-                    }
+                    const varToken = [variacao.cor, variacao.tecido]
+                        .filter(Boolean)
+                        .join('-')
+                        .toUpperCase()
+                        .replace(/[^A-Z0-9]/g, '-');
+                    const varSku = row.sku ? `${row.sku}-${varToken}` : '';
 
                     result.push({
                         ...row,
                         ...estoqueZerado,
-                        codigo_barras: uniqueCodigoBarras,
+                        sku: varSku || row.sku,
+                        codigo_barras: null, // Variações não herdam EAN ambíguo único
                         cor: variacao.cor,
                         modelos_tecidos: variacao.tecido,
                         cor_hex: variacao.cor ? getColorHex(variacao.cor) : null,
-                        id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
                         variacoes: []
                     });
                 }
@@ -703,8 +730,17 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
 
                 if (data.length > 0) {
                     const prepared = prepareProducts(data);
-                    console.log('[Import] Produtos preparados (sem agrupamento):', prepared.length);
+                    console.log('[Import] Produtos preparados:', prepared.length);
                     setGroupedProducts(prepared);
+
+                    // Executar pré-validação completa e estrita
+                    const valResult = validateImportPlanilha({
+                        rows: prepared,
+                        produtosExistentes: catalogoProdutos,
+                        organizationId: organization?.id,
+                    });
+
+                    setValidationResult(valResult);
                     setStep(2);
                 } else {
                     console.log('[Import] Nenhum produto encontrado nos dados');
@@ -720,7 +756,7 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
             toast.error('Erro ao ler arquivo');
         };
         reader.readAsText(uploadedFile);
-    }, []);
+    }, [catalogoProdutos, organization?.id]);
 
     // Download template
     const downloadTemplate = () => {
@@ -733,18 +769,55 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
         window.URL.revokeObjectURL(url);
     };
 
+    const suggestionCache = useMemo(() => new Map(), []);
+
+    const getSuggestedMetadata = useCallback((item) => {
+        const cacheKey = String(item?.nome || '').trim().toLowerCase();
+        if (!cacheKey) {
+            return { categoria: item?.categoria || '', ambiente: item?.ambiente || '' };
+        }
+
+        if (suggestionCache.has(cacheKey)) {
+            return suggestionCache.get(cacheKey);
+        }
+
+        const detected = detectProductKeywordSuggestion(item.nome, { returnDefault: true });
+        const resolved = {
+            categoria: item.categoria || detected.categoriaSuggestion,
+            ambiente: item.ambiente || detected.ambienteSuggestion
+        };
+        suggestionCache.set(cacheKey, resolved);
+        return resolved;
+    }, [suggestionCache]);
+
     // Import products
     const handleImport = async () => {
-        cancelImportRef.current = false; // Reset flag de cancelamento
+        if (!organization?.id) {
+            toast.error('Organização não identificada. A importação foi bloqueada por segurança.');
+            return;
+        }
+
+        if (catalogoError) {
+            toast.error('Não é possível importar enquanto o catálogo não puder ser verificado.');
+            return;
+        }
+
+        if (!validationResult || !validationResult.isValid) {
+            toast.error('A planilha contém erros impeditivos de SKU/EAN. Corrija o arquivo antes de importar.');
+            return;
+        }
+
+        cancelImportRef.current = false;
         setImporting(true);
         setStep(3);
         setProgress(0);
+        setImportSummary(null);
 
         let fornecedoresMap = {};
         const normalizeFornecedor = (nome) => String(nome || '').trim().toLowerCase();
 
         try {
-            // 1. Primeiro, criar fornecedores que não existem
+            // 1. Fornecedores
             const fornecedoresNomes = [...new Set(
                 groupedProducts
                     .map(p => p.fornecedor_nome)
@@ -753,8 +826,6 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
 
             if (fornecedoresNomes.length > 0) {
                 console.log('[Import] Verificando fornecedores:', fornecedoresNomes);
-
-                // Buscar fornecedores existentes
                 const fornecedoresExistentes = await base44.entities.Fornecedor.list();
                 const nomesExistentes = new Set(
                     fornecedoresExistentes.map(f => normalizeFornecedor(f.nome_empresa))
@@ -765,7 +836,6 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                     if (chave) fornecedoresMap[chave] = f.id;
                 });
 
-                // Criar fornecedores novos
                 const novosFornecedores = fornecedoresNomes.filter(
                     nome => !nomesExistentes.has(normalizeFornecedor(nome))
                 );
@@ -779,295 +849,185 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                         if (chave && novoFornecedor?.id) {
                             fornecedoresMap[chave] = novoFornecedor.id;
                         }
-                        console.log('[Import] Fornecedor criado:', nomeFornecedor);
                     } catch (err) {
                         console.warn('[Import] Erro ao criar fornecedor:', nomeFornecedor, err);
                     }
-                }
-
-                if (!novosFornecedores.length) {
-                    fornecedoresNomes.forEach(nome => {
-                        const chave = normalizeFornecedor(nome);
-                        if (!chave || fornecedoresMap[chave]) return;
-                        const existente = fornecedoresExistentes.find(f => normalizeFornecedor(f.nome_empresa) === chave);
-                        if (existente?.id) fornecedoresMap[chave] = existente.id;
-                    });
-                }
-
-                if (novosFornecedores.length > 0) {
-                    toast.success(`${novosFornecedores.length} fornecedor(es) criado(s) automaticamente`);
                 }
             }
         } catch (err) {
             console.warn('[Import] Erro ao processar fornecedores:', err);
         }
 
-        // ========================================
-        // PRODUTOS INDIVIDUAIS (sem agrupamento pai/filho)
-        // Cada variação de cor/tecido vira um produto independente
-        // ========================================
         const totalProdutos = groupedProducts.length;
         let processados = 0;
-        let imported = 0;
-        let skipped = 0;
-        let failed = 0;
-        const usedCodes = new Set();
-        const usedModelos = new Set();
-        const failedProducts = [];
-        const suggestionCache = new Map();
-        const orgId = organization?.id || '00000000-0000-0000-0000-000000000001';
+        let criados = 0;
+        let atualizados = 0;
+        let ignorados = 0;
+        let falharam = 0;
+        const falhasDetalhadas = [];
+        const produtoIdsCriadosOuAtualizados = [];
 
-        console.log(`[Import] ${totalProdutos} produtos individuais a inserir (cada cor/tecido = 1 produto)`);
+        // Separar itens entre inserções (novos) e atualizações (existentes)
+        const itemsToInsert = [];
+        const itemsToUpdate = [];
 
-        // ========================================
-        // FASE 1/2: Processar produtos em tempo real, em lotes pequenos
-        // Isso evita estourar a memória com planilhas muito grandes.
-        // ========================================
-        const BATCH_SIZE = Math.min(50, Math.max(25, Math.ceil(totalProdutos / 1000)));
-        const produtoIds = [];
-        const pendingBatch = [];
+        for (const item of groupedProducts) {
+            const chaveSku = normalizeSkuForComparison(item.sku);
+            const existing = produtosExistentes.get(chaveSku);
+            const { categoria, ambiente } = getSuggestedMetadata(item);
+            const fornecedorId = fornecedoresMap[normalizeFornecedor(item.fornecedor_nome)] || null;
 
-        const getSuggestedMetadata = (item) => {
-            const cacheKey = String(item?.nome || '').trim().toLowerCase();
-            if (!cacheKey) {
-                return { categoria: item?.categoria || '', ambiente: item?.ambiente || '' };
+            if (existing) {
+                const payload = buildUpdateProductPayload({
+                    item,
+                    existingProduct: existing,
+                    organizationId: organization.id,
+                    fornecedorId,
+                    categoria,
+                    ambiente
+                });
+                itemsToUpdate.push({ payload, existing, originalItem: item });
+            } else {
+                const payload = buildInsertProductPayload({
+                    item,
+                    organizationId: organization.id,
+                    fornecedorId,
+                    categoria,
+                    ambiente
+                });
+                itemsToInsert.push({ payload, originalItem: item });
             }
+        }
 
-            if (suggestionCache.has(cacheKey)) {
-                return suggestionCache.get(cacheKey);
-            }
+        console.log(`[Import] Total: ${totalProdutos} | Inserções: ${itemsToInsert.length} | Atualizações: ${itemsToUpdate.length}`);
 
-            const detected = detectProductKeywordSuggestion(item.nome, { returnDefault: true });
-            const resolved = {
-                categoria: item.categoria || detected.categoriaSuggestion,
-                ambiente: item.ambiente || detected.ambienteSuggestion
-            };
-            suggestionCache.set(cacheKey, resolved);
-            return resolved;
-        };
+        // Processar inserções em lotes
+        const INSERT_BATCH_SIZE = 50;
+        for (let i = 0; i < itemsToInsert.length; i += INSERT_BATCH_SIZE) {
+            if (cancelImportRef.current) break;
 
-        const persistBatch = async (batchProducts) => {
-            if (!batchProducts.length) return [];
+            const chunk = itemsToInsert.slice(i, i + INSERT_BATCH_SIZE);
+            setCurrentlyProcessing(() => chunk.slice(0, 3).map(c => c.originalItem.nome + (c.originalItem.cor ? ` (${c.originalItem.cor})` : '')));
 
-            setCurrentlyProcessing(() => batchProducts.slice(0, 3).map(p => p.nome + (p.cor ? ` (${p.cor})` : '')));
-
-            const dedupMap = new Map();
-            for (const prod of batchProducts) {
-                dedupMap.set(prod.codigo_barras, prod);
-            }
-            const dedupedBatch = [...dedupMap.values()];
+            const payloads = chunk.map(c => c.payload);
 
             try {
-                const { data: insertedBatch, error: batchError } = await withRetry(async () =>
+                const { data: inserted, error: batchErr } = await withRetry(async () =>
                     supabase
                         .from('produtos')
-                        .upsert(dedupedBatch, { onConflict: 'codigo_barras,organization_id' })
+                        .insert(payloads)
                         .select('id')
                 );
 
-                if (batchError) {
-                    throw batchError;
-                }
+                if (batchErr) throw batchErr;
 
-                const ids = (insertedBatch || []).map(p => p.id).filter(Boolean);
-                produtoIds.push(...ids);
-                imported += ids.length;
-
-                const historicos = ids.map(produtoId => ({
-                    organization_id: orgId,
-                    produto_id: produtoId,
-                    preco_antigo: 0,
-                    preco_novo: 0,
-                    tipo: 'venda',
-                    motivo: `Importação Smart - ${file?.name || 'arquivo'}`,
-                    usuario_nome: user?.nome || 'Sistema'
-                }));
-
-                const HISTORICO_BATCH_SIZE = 500;
-                for (let i = 0; i < historicos.length; i += HISTORICO_BATCH_SIZE) {
-                    const chunk = historicos.slice(i, i + HISTORICO_BATCH_SIZE);
-                    try {
-                        const { error: histErr } = await supabase
-                            .from('historico_precos')
-                            .insert(chunk);
-                        if (histErr) throw histErr;
-                    } catch (err) {
-                        console.warn('[Import] Histórico de preços (batch) falhou:', err);
-                    }
-                }
-
-                console.log(`[Import] Batch inserido: ${ids.length} produtos individuais`);
-                return ids;
-            } catch (err) {
-                console.error('[Import] Erro no batch de produtos:', err);
-                let batchImported = 0;
-                for (const prod of dedupedBatch) {
+                const ids = (inserted || []).map(p => p.id).filter(Boolean);
+                criados += ids.length;
+                produtoIdsCriadosOuAtualizados.push(...ids);
+            } catch (batchErr) {
+                console.warn('[Import] Falha no lote de inserção, tentando individualmente:', batchErr);
+                for (const entry of chunk) {
                     try {
                         const { data: single, error: singleErr } = await withRetry(async () =>
                             supabase
                                 .from('produtos')
-                                .upsert(prod, { onConflict: 'codigo_barras,organization_id' })
+                                .insert(entry.payload)
                                 .select('id')
                         );
                         if (singleErr) throw singleErr;
                         if (single?.[0]?.id) {
-                            produtoIds.push(single[0].id);
-                            imported++;
-                            batchImported++;
+                            criados++;
+                            produtoIdsCriadosOuAtualizados.push(single[0].id);
                         }
                     } catch (singleErr) {
-                        console.error('[Import] Falha individual:', prod.nome, prod.cor, singleErr);
-                        failed++;
-                        failedProducts.push(`${prod.nome}${prod.cor ? ` (${prod.cor})` : ''}`);
+                        console.error('[Import] Erro ao inserir produto:', entry.originalItem.sku, singleErr);
+                        falharam++;
+                        falhasDetalhadas.push(`${entry.originalItem.sku || entry.originalItem.nome}: ${singleErr.message || 'Erro ao inserir'}`);
                     }
                 }
-                return batchImported;
             }
-        };
 
-        for (const item of groupedProducts) {
-            if (cancelImportRef.current) break;
-
-            const { categoria, ambiente } = getSuggestedMetadata(item);
-
-            // Gerar SKU/codigo_barras único incluindo cor e tecido, mesmo quando a planilha
-            // contém linhas repetidas ou códigos em branco.
-            const rawSku = item.codigo_barras || generateSKU(item.fornecedor_nome, item.modelo_referencia, item.cor, item.modelos_tecidos, item.nome);
-            const codigoBarras = buildUniqueCodigoBarras(
-                rawSku,
-                item.linha || processados + 1,
-                usedCodes,
-                produtosExistentes
-            );
-            usedCodes.add(codigoBarras.toLowerCase());
-
-            const modeloBase = (item.modelo_referencia || '').trim();
-            const nameSlug = (item.nome || '')
-                .normalize('NFD')
-                .replace(/[\u0300-\u036f]/g, '')
-                .toUpperCase()
-                .replace(/[^A-Z0-9]/g, '')
-                .substring(0, 8);
-
-            const variationSuffix = buildVariationSuffix(item.cor, item.modelos_tecidos);
-            const modeloUnico = buildUniqueModeloReferencia(
-                modeloBase,
-                nameSlug,
-                variationSuffix,
-                item.linha || processados + 1,
-                usedModelos
-            );
-
-            pendingBatch.push({
-                nome: item.nome,
-                categoria,
-                ambiente,
-                fornecedor_nome: item.fornecedor_nome || '',
-                fornecedor_id: fornecedoresMap[normalizeFornecedor(item.fornecedor_nome)] || null,
-                modelo_referencia: modeloUnico,
-                material: item.material || '',
-                tipo_entrega_padrao: 'desmontado',
-                largura: item.largura || null,
-                altura: item.altura || null,
-                profundidade: item.profundidade || null,
-                preco_custo: item.preco_custo || 0,
-                preco_venda: item.preco_venda || calcularPrecoFinalImportacao(item) || 0,
-                impostos_percentual: sanitizeNumeric52(item.impostos_percentual, 0),
-                frete_custo: item.frete_custo || 0,
-                ipi_percentual: sanitizeNumeric52(item.ipi_percentual, 0),
-                markup_grupo1_prontos: sanitizeNumeric52(item.markup_grupo1_prontos, 0),
-                markup_grupo2_montagem: sanitizeNumeric52(item.markup_grupo2_montagem, 0),
-                markup_grupo3_lustre: sanitizeNumeric52(item.markup_grupo3_lustre, 0),
-                markup_aplicado: sanitizeNumeric52(item.markup_aplicado, 0),
-                desconto_max_vendedor: sanitizeNumeric52(item.desconto_max_vendedor, 5),
-                desconto_max_gerencial: sanitizeNumeric52(item.desconto_max_gerencial, 15),
-                requer_montagem: item.requer_montagem || false,
-                montagem_terceirizado: item.montagem_terceirizado || false,
-                cor: item.cor || '',
-                cor_hex: item.cor_hex || null,
-                variacoes: [],
-                fotos: [],
-                ativo: true,
-                is_parent: false,
-                parent_id: null,
-                organization_id: orgId,
-                codigo_barras: codigoBarras
-            });
-
-            if (pendingBatch.length >= BATCH_SIZE) {
-                await persistBatch(pendingBatch);
-                processados += pendingBatch.length;
-                setProgress(5 + Math.round((processados / totalProdutos) * 85));
-                pendingBatch.length = 0;
-                await sleep(25);
-            }
+            processados += chunk.length;
+            setProgress(5 + Math.round((processados / totalProdutos) * 85));
+            await sleep(20);
         }
 
-        if (pendingBatch.length > 0) {
-            await persistBatch(pendingBatch);
-            processados += pendingBatch.length;
+        // Processar atualizações cirúrgicas (update por id + organization_id)
+        for (const entry of itemsToUpdate) {
+            if (cancelImportRef.current) break;
+
+            setCurrentlyProcessing([entry.originalItem.nome + (entry.originalItem.cor ? ` (${entry.originalItem.cor})` : '')]);
+
+            try {
+                const { error: updateErr } = await withRetry(async () =>
+                    supabase
+                        .from('produtos')
+                        .update(entry.payload)
+                        .eq('id', entry.existing.id)
+                        .eq('organization_id', organization.id)
+                );
+
+                if (updateErr) throw updateErr;
+
+                atualizados++;
+                produtoIdsCriadosOuAtualizados.push(entry.existing.id);
+            } catch (updateErr) {
+                console.error('[Import] Erro ao atualizar produto:', entry.originalItem.sku, updateErr);
+                falharam++;
+                falhasDetalhadas.push(`${entry.originalItem.sku}: ${updateErr.message || 'Erro ao atualizar'}`);
+            }
+
+            processados++;
             setProgress(5 + Math.round((processados / totalProdutos) * 85));
-            pendingBatch.length = 0;
+            if (processados % 10 === 0) await sleep(10);
+        }
+
+        // Histórico de preços
+        if (produtoIdsCriadosOuAtualizados.length > 0) {
+            const historicos = produtoIdsCriadosOuAtualizados.map(produtoId => ({
+                organization_id: organization.id,
+                produto_id: produtoId,
+                preco_antigo: 0,
+                preco_novo: 0,
+                tipo: 'venda',
+                motivo: `Importação Smart - ${file?.name || 'arquivo'}`,
+                usuario_nome: user?.nome || 'Sistema'
+            }));
+
+            const HISTORICO_BATCH_SIZE = 500;
+            for (let i = 0; i < historicos.length; i += HISTORICO_BATCH_SIZE) {
+                const chunk = historicos.slice(i, i + HISTORICO_BATCH_SIZE);
+                try {
+                    await supabase.from('historico_precos').insert(chunk);
+                } catch (err) {
+                    console.warn('[Import] Histórico de preços falhou:', err);
+                }
+            }
         }
 
         setProgress(100);
+        setImporting(false);
+        setCurrentlyProcessing([]);
+
+        const summary = {
+            criados,
+            atualizados,
+            ignorados,
+            falharam,
+            falhasDetalhadas
+        };
+        setImportSummary(summary);
 
         if (cancelImportRef.current) {
-            toast.warning(`Importação cancelada. ${imported} importados de ${totalProdutos}.`);
-        }
-
-        setImporting(false);
-
-        if (failed === 0) {
-            toast.success(`${imported} produto(s) importados com sucesso.`);
+            toast.warning(`Importação interrompida. ${criados} criados, ${atualizados} atualizados de ${totalProdutos}.`);
+        } else if (falharam === 0) {
+            toast.success(`Importação concluída com sucesso! ${criados} criado(s), ${atualizados} atualizado(s).`);
             onSuccess?.();
-            handleClose();
         } else {
-            const errorMsg = failedProducts.length <= 3
-                ? failedProducts.join(', ')
-                : `${failedProducts.slice(0, 3).join(', ')} e mais ${failedProducts.length - 3} itens. Veja o console para detalhes.`;
-            toast.warning(`${imported} importados. Falharam ${failed}: ${errorMsg}`, { duration: 10000 });
-        }
-    };
-
-    // Sugerir NCMs usando IA Gemini
-    const handleSuggestNCM = async () => {
-        if (enrichingNCM) return;
-
-        setEnrichingNCM(true);
-        setNcmProgress({ current: 0, total: groupedProducts.length, message: 'Iniciando IA...' });
-
-        try {
-            // Callback para progresso
-            const onProgress = (current, total, message) => {
-                setNcmProgress({ current, total, message });
-            };
-
-            const result = await sugerirNCMsComIA(groupedProducts, onProgress);
-
-            if (result.success) {
-                // Aplicar sugestões aos produtos agrupados
-                const enrichedProducts = aplicarSugestoesNCM(groupedProducts, result.sugestoes);
-                setGroupedProducts(enrichedProducts);
-
-                // Mostrar estatísticas
-                setNcmStats(result.stats);
-
-                if (result.erros && result.erros.length > 0) {
-                    console.warn("Erros parciais no enriquecimento NCM:", result.erros);
-                }
-
-                toast.success(`NCMs sugeridos! IA: ${result.stats?.gemini}, Fallback: ${result.stats?.fallback}`, {
-                    icon: <Sparkles className="w-4 h-4 text-yellow-500" />
-                });
-            } else {
-                toast.error("Erro ao sugerir NCMs: " + result.erros?.join(', '));
+            toast.warning(`Importação finalizada com ${falharam} falha(s). Verifique o resumo.`);
+            if (criados > 0 || atualizados > 0) {
+                onSuccess?.();
             }
-        } catch (error) {
-            console.error(error);
-            toast.error("Erro ao conectar com serviço de IA");
-        } finally {
-            setEnrichingNCM(false);
         }
     };
 
@@ -1093,7 +1053,7 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                     </DialogTitle>
                     <DialogDescription>
                         {step === 1 && "Faça upload de um arquivo CSV para importar produtos em lote."}
-                        {step === 2 && "Revise os produtos antes de importar e opcionalmente enriqueça com NCMs sugeridos por IA."}
+                        {step === 2 && "Revise os produtos e seus dados fiscais antes de importar."}
                         {step === 3 && "Aguarde enquanto os produtos são importados para o sistema."}
                         {step === 4 && "Enriquecendo produtos com códigos NCM usando inteligência artificial."}
                     </DialogDescription>
@@ -1166,11 +1126,21 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                     {/* Step 2: Preview */}
                     {step === 2 && (
                         <div className="space-y-4">
+                            {catalogoError && (
+                                <Alert variant="destructive">
+                                    <AlertTriangle className="w-4 h-4" />
+                                    <AlertDescription>
+                                        <p className="font-semibold">Erro ao carregar catálogo:</p>
+                                        <p className="text-sm">{catalogoError}</p>
+                                    </AlertDescription>
+                                </Alert>
+                            )}
+
                             {errors.length > 0 && (
                                 <Alert variant="destructive">
                                     <AlertTriangle className="w-4 h-4" />
                                     <AlertDescription>
-                                        <p className="font-medium mb-1">{errors.length} erro(s) encontrado(s):</p>
+                                        <p className="font-medium mb-1">{errors.length} erro(s) de formato na leitura do arquivo:</p>
                                         <ul className="text-sm list-disc list-inside">
                                             {errors.slice(0, 5).map((err, i) => (
                                                 <li key={i}>{err}</li>
@@ -1178,6 +1148,55 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                                             {errors.length > 5 && (
                                                 <li>... e mais {errors.length - 5} erros</li>
                                             )}
+                                        </ul>
+                                    </AlertDescription>
+                                </Alert>
+                            )}
+
+                            {/* Validação de Identidade (SKU / GTIN) */}
+                            {validationResult && !validationResult.isValid && (
+                                <Alert variant="destructive">
+                                    <AlertTriangle className="w-4 h-4" />
+                                    <AlertDescription>
+                                        <p className="font-semibold mb-1">
+                                            Importação bloqueada por inconsistência ({validationResult.blockingErrors.length} erro(s) impeditivo(s)):
+                                        </p>
+                                        <p className="text-xs mb-2">
+                                            O sistema exige SKU obrigatório/único e EAN válido (GTIN-8/12/13/14 com checksum). Corrija a planilha para prosseguir:
+                                        </p>
+                                        <ul className="text-xs list-disc list-inside max-h-40 overflow-y-auto space-y-1">
+                                            {validationResult.blockingErrors.map((err, i) => (
+                                                <li key={i}>{err}</li>
+                                            ))}
+                                        </ul>
+                                    </AlertDescription>
+                                </Alert>
+                            )}
+
+                            {validationResult && validationResult.isValid && (
+                                <div className="flex flex-wrap items-center gap-2 p-3 bg-green-50 border border-green-200 rounded-lg text-xs">
+                                    <Badge variant="outline" className="bg-white text-green-700 border-green-300 font-semibold">
+                                        ✓ Validação de integridade aprovada
+                                    </Badge>
+                                    <span className="text-green-800">
+                                        <strong>{validationResult.stats.novos}</strong> novo(s) a cadastrar
+                                    </span>
+                                    <span className="text-gray-400">•</span>
+                                    <span className="text-blue-800">
+                                        <strong>{validationResult.stats.atualizacoes}</strong> existente(s) a atualizar
+                                    </span>
+                                </div>
+                            )}
+
+                            {validationResult && validationResult.warnings && validationResult.warnings.length > 0 && (
+                                <Alert className="bg-amber-50 border-amber-200 text-amber-900">
+                                    <AlertTriangle className="w-4 h-4 text-amber-600" />
+                                    <AlertDescription>
+                                        <p className="font-semibold text-xs mb-1">Avisos ({validationResult.warnings.length}):</p>
+                                        <ul className="text-xs list-disc list-inside max-h-24 overflow-y-auto">
+                                            {validationResult.warnings.map((w, i) => (
+                                                <li key={i}>{w}</li>
+                                            ))}
                                         </ul>
                                     </AlertDescription>
                                 </Alert>
@@ -1244,6 +1263,12 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                                                             {product.nome}{product.modelo_referencia ? ` - ${product.modelo_referencia}` : ''}
                                                         </h4>
                                                         <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-xs text-gray-500">
+                                                            {product.sku && (
+                                                                <span>SKU: <span className="font-mono font-semibold text-gray-800">{product.sku}</span></span>
+                                                            )}
+                                                            {product.codigo_barras && (
+                                                                <span>EAN: <span className="font-mono font-medium text-gray-700">{product.codigo_barras}</span></span>
+                                                            )}
                                                             {product.fornecedor_nome && (
                                                                 <span>Fornecedor: <span className="font-medium text-gray-700">{product.fornecedor_nome}</span></span>
                                                             )}
@@ -1266,13 +1291,7 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                                                                 <span>Markup: <span className="font-medium text-gray-700">{product.markup_aplicado}</span></span>
                                                             )}
                                                             {product.ncm && (
-                                                                <span className={`inline-flex items-center gap-1 ${product.ncm_fonte === 'gemini' ? 'text-purple-600 font-medium' : ''
-                                                                    }`}>
-                                                                    NCM: <span className="font-medium">{product.ncm}</span>
-                                                                    {product.ncm_fonte === 'gemini' && (
-                                                                        <Sparkles className="w-3 h-3 text-purple-600 inline ml-0.5" />
-                                                                    )}
-                                                                </span>
+                                                                <span>NCM: <span className="font-medium">{product.ncm}</span></span>
                                                             )}
                                                         </div>
                                                     </div>
@@ -1395,10 +1414,45 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                             <div className="space-y-2">
                                 <Progress value={progress} className="h-2" />
                                 <div className="flex justify-between items-center text-sm text-gray-500">
-                                    <span>Processando itens...</span>
+                                    <span>{importing ? 'Processando itens...' : 'Processamento finalizado'}</span>
                                     <span className="font-semibold">{progress}%</span>
                                 </div>
                             </div>
+
+                            {/* Resumo pós-importação */}
+                            {!importing && importSummary && (
+                                <div className="mt-6 space-y-4">
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+                                        <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                                            <p className="text-xs text-green-700 font-medium">Criados</p>
+                                            <p className="text-2xl font-bold text-green-800">{importSummary.criados}</p>
+                                        </div>
+                                        <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                            <p className="text-xs text-blue-700 font-medium">Atualizados</p>
+                                            <p className="text-2xl font-bold text-blue-800">{importSummary.atualizados}</p>
+                                        </div>
+                                        <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                                            <p className="text-xs text-gray-600 font-medium">Ignorados</p>
+                                            <p className="text-2xl font-bold text-gray-700">{importSummary.ignorados}</p>
+                                        </div>
+                                        <div className={`p-3 rounded-lg border ${importSummary.falharam > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+                                            <p className={`text-xs font-medium ${importSummary.falharam > 0 ? 'text-red-700' : 'text-gray-600'}`}>Falhas</p>
+                                            <p className={`text-2xl font-bold ${importSummary.falharam > 0 ? 'text-red-800' : 'text-gray-700'}`}>{importSummary.falharam}</p>
+                                        </div>
+                                    </div>
+
+                                    {importSummary.falhasDetalhadas?.length > 0 && (
+                                        <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                                            <p className="text-xs font-semibold text-red-800 mb-2">Erros detalhados:</p>
+                                            <ul className="text-xs text-red-700 list-disc list-inside max-h-36 overflow-y-auto space-y-1 font-mono">
+                                                {importSummary.falhasDetalhadas.map((falha, idx) => (
+                                                    <li key={idx}>{falha}</li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+                                </div>
+                            )}
 
                             {/* Visualização de Grade: Itens sendo processados agora */}
                             {importing && currentlyProcessing.length > 0 && (
@@ -1437,30 +1491,17 @@ export default function ImportProdutosModal({ isOpen, onClose, onSuccess }) {
                             }
                         }}
                     >
-                        {step === 3 && !importing ? 'Fechar' : 'Cancelar'}
+                        {step === 3 && !importing ? 'Concluir' : 'Cancelar'}
                     </Button>
                     {step === 2 && (
                         <div className="flex gap-2">
-                            {enrichingNCM ? (
-                                <div className="flex items-center gap-2 mr-2">
-                                    <Loader2 className="w-4 h-4 animate-spin text-purple-600" />
-                                    <span className="text-sm text-purple-600 font-medium">
-                                        Analizando com IA... {(ncmProgress.current / ncmProgress.total * 100).toFixed(0)}%
-                                    </span>
-                                </div>
-                            ) : (
-                                <Button
-                                    onClick={handleSuggestNCM}
-                                    variant="outline"
-                                    className="border-purple-200 text-purple-700 hover:bg-purple-50 hover:text-purple-800 gap-2"
-                                    disabled={groupedProducts.length === 0}
-                                >
-                                    <Sparkles className="w-4 h-4" />
-                                    Sugerir NCMs com IA
-                                </Button>
-                            )}
+                            
 
-                            <Button onClick={handleImport} className="bg-green-600 hover:bg-green-700 gap-2">
+                            <Button
+                                onClick={handleImport}
+                                disabled={!validationResult?.isValid || !organization?.id || !!catalogoError || groupedProducts.length === 0 || importing}
+                                className="bg-green-600 hover:bg-green-700 gap-2 disabled:opacity-50"
+                            >
                                 <Upload className="w-4 h-4" />
                                 Importar {groupedProducts.length} Produto(s)
                             </Button>

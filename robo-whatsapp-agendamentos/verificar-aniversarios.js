@@ -1,3 +1,4 @@
+const { getBotJobHeaders } = require('./jobAuth');
 require("dotenv").config();
 const { createClient } = require('@supabase/supabase-js');
 
@@ -112,13 +113,9 @@ async function buscarLojasAtivas(orgId) {
 async function enviarMensagemAniversario(cliente, cupomCodigo, lojas, orgId) {
     try {
         const PORT = process.env.PORT || 3001;
-        const BOT_API_SECRET = process.env.BOT_API_SECRET || '';
 
-        const headers = {
-            'Content-Type': 'application/json',
-            'x-organization-id': orgId,
-            ...(BOT_API_SECRET ? { 'x-bot-api-key': BOT_API_SECRET } : {})
-        };
+
+        const headers = await getBotJobHeaders(orgId);
 
         const response = await fetch(`http://localhost:${PORT}/enviar-mensagem-aniversario`, {
             method: 'POST',

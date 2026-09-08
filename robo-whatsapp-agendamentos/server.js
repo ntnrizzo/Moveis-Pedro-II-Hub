@@ -11,11 +11,9 @@ const cors = require('cors');
 const crypto = require('crypto');
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 // --- CONFIGURAÇÕES (via variáveis de ambiente) ---
 const PORT = process.env.PORT || 3001;
-// const GEMINI_KEY = process.env.GEMINI_API_KEY; // Removido para busca dinâmica
 
 // 🚨 SUPABASE (Banco de Dados)
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -24,7 +22,10 @@ const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 const { createClient } = require('@supabase/supabase-js');
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-const TRACKING_TOKEN_SECRET = process.env.TRACKING_TOKEN_SECRET || SUPABASE_SERVICE_KEY || 'moveispedroii-tracking-secret';
+const TRACKING_TOKEN_SECRET = process.env.TRACKING_TOKEN_SECRET;
+if (!TRACKING_TOKEN_SECRET) {
+  throw new Error('TRACKING_TOKEN_SECRET é obrigatório em produção.');
+}
 const TRACKING_TOKEN_TTL_SECONDS = Number(process.env.TRACKING_TOKEN_TTL_SECONDS || 7200);
 const OFFICIAL_TRACKING_BASE_URL = 'https://moveispedro2.com.br';
 const LOCAL_DEV_TRACKING_BASE_URL = 'http://localhost:5173';
@@ -309,32 +310,8 @@ const WHATSAPP_SEND_ROUTES = new Set([
     '/concluir-entrega'
 ]);
 
-app.use(async (req, res, next) => {
-    // Só verificar rotas POST de envio de mensagem
-    if (req.method !== 'POST' || !WHATSAPP_SEND_ROUTES.has(req.path)) {
-        return next();
-    }
 
-    const orgId = req.body?.organization_id || DEFAULT_ORG_ID;
-    const moduloAtivo = await verificarModuloWhatsApp(orgId);
-
-    if (!moduloAtivo) {
-        console.warn(`🚫 [ModuleCheck] Módulo WhatsApp DESATIVADO para org ${orgId}. Bloqueando rota ${req.path}.`);
-        return res.status(403).json({
-            error: 'Módulo de WhatsApp não incluído no seu plano atual.',
-            code: 'MODULE_DISABLED',
-            module: 'whatsapp',
-            organization_id: orgId
-        });
-    }
-
-    next();
-});
-
-// 🔐 PROTEÇÃO DE ROTAS DO BOT — Middleware de API Key
-const BOT_API_SECRET = process.env.BOT_API_SECRET;
-
-// Rotas que exigem autenticação via x-bot-api-key
+// Rotas que exigem JWT de usuário autenticado
 const BOT_PROTECTED_ROUTES = new Set([
     '/send-text', '/send-image-url',
     '/disparar-confirmacoes', '/mensagem-pos-venda',
@@ -351,26 +328,33 @@ const BOT_PROTECTED_ROUTES = new Set([
     '/status', '/whatsapp/status', '/logs',
 ]);
 
-app.use((req, res, next) => {
-    // Só verificar rotas de API conhecidas (SPA e static files passam direto)
-    const needsAuth = BOT_PROTECTED_ROUTES.has(req.path) || req.path.startsWith('/nfe-xml/');
-    if (!needsAuth) return next();
+const { createBotAuth } = require('./authMiddleware');
+app.use(createBotAuth(supabase, BOT_PROTECTED_ROUTES));
 
-    // Fallback: se BOT_API_SECRET não estiver configurado, permitir (modo dev)
-    if (!BOT_API_SECRET) return next();
+app.use(async (req, res, next) => {
+    // Só verificar rotas POST de envio de mensagem
+    if (req.method !== 'POST' || !WHATSAPP_SEND_ROUTES.has(req.path)) {
+        return next();
+    }
 
-    const providedKey = req.headers['x-bot-api-key'];
-    if (providedKey !== BOT_API_SECRET) {
-        console.warn(`🚫 [BotAuth] Acesso negado à rota ${req.method} ${req.path} — API key inválida ou ausente`);
+    const orgId = req.auth?.organizationId;
+    if (!orgId) return res.status(401).json({ error: 'Não autenticado' });
+    const moduloAtivo = await verificarModuloWhatsApp(orgId);
+
+    if (!moduloAtivo) {
+        console.warn(`🚫 [ModuleCheck] Módulo WhatsApp DESATIVADO para org ${orgId}. Bloqueando rota ${req.path}.`);
         return res.status(403).json({
-            error: 'Acesso negado. Chave de API inválida.',
-            code: 'INVALID_API_KEY'
+            error: 'Módulo de WhatsApp não incluído no seu plano atual.',
+            code: 'MODULE_DISABLED',
+            module: 'whatsapp',
+            organization_id: orgId
         });
     }
 
     next();
 });
 
+// 🔐 PROTEÇÃO DE ROTAS DO BOT — Middleware de JWT
 // 🏗️ SERVE FRONTEND (Monolith Mode)
 // Serves static files from the React build folder
 // Works both locally (../dist) and in Docker (/app/dist)
@@ -389,7 +373,8 @@ const whatsappManager = new TenantWhatsAppManager(supabase);
  * Helper para extrair o ID da organização do request (Headers, Query ou Body)
  */
 function extractOrgId(req) {
-    return req.headers['x-organization-id'] || req.query?.organization_id || req.body?.organization_id || DEFAULT_ORG_ID;
+    if (!req.auth?.organizationId) throw new Error('Organização autenticada obrigatória');
+    return req.auth.organizationId;
 }
 
 let filaEspera = {};
@@ -1144,7 +1129,7 @@ app.post('/aviso-proxima-parada', async (req, res) => {
     const { data: entregaDb, error: entregaError } = await supabase
         .from('entregas')
         .select('id, numero_pedido, status')
-        .eq('id', id)
+        .eq('id', id).eq('organization_id', req.auth.organizationId)
         .single();
 
     if (entregaError || !entregaDb) {
@@ -1155,7 +1140,7 @@ app.post('/aviso-proxima-parada', async (req, res) => {
         await supabase
             .from('entregas')
             .update({ status: 'Próxima parada' })
-            .eq('id', id);
+            .eq('id', id).eq('organization_id', req.auth.organizationId);
     }
 
     // URL da Landing Page (ajuste se o domínio for diferente)
@@ -1386,111 +1371,6 @@ Um grande abraço! 🧡💚`;
     } catch (e) {
         console.error("Erro zap aniversário:", e);
         res.status(500).json({ error: e.message });
-    }
-});
-
-// Função auxiliar para obter a chave (Env ou Banco)
-async function getGeminiApiKey() {
-    // 1. Tentar Environment (Prioridade para Dev/Override)
-    if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
-
-    try {
-        const { data, error } = await supabase
-            .from("configuracao_sistema")
-            .select("dados")
-            .eq("tipo", "integracoes")
-            .single();
-
-        if (error || !data?.dados?.gemini_api_key) {
-            console.warn("Chave Gemini não encontrada no banco de dados");
-            return null;
-        }
-        return data.dados.gemini_api_key;
-    } catch (e) {
-        console.error("Erro ao buscar chave Gemini no banco:", e);
-        return null;
-    }
-}
-
-// --- ROTA 7: BUSCA DE PRODUTO COM IA (PARA CADASTRO RÁPIDO) ---
-app.post('/buscar-produto-ia', async (req, res) => {
-    const { busca } = req.body;
-
-    if (!busca || !busca.trim()) {
-        return res.status(400).json({ error: "Campo 'busca' é obrigatório" });
-    }
-
-    try {
-        const apiKey = await getGeminiApiKey();
-        if (!apiKey) {
-            return res.status(500).json({ error: "Chave da API Gemini não configurada (Verifique Configurações > Integrações)" });
-        }
-
-        const genAI = new GoogleGenerativeAI(apiKey);
-        const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-        const prompt = `Busque informações EXATAS sobre este produto de móveis:
-"${busca}"
-
-FONTES OBRIGATÓRIAS (priorize sites brasileiros):
-- MadeiraMadeira.com.br
-- Mobly.com.br
-- TokStok.com.br
-- CasasBahia.com.br
-- Lojas Americanas
-- Sites de fabricantes brasileiros de móveis
-
-REGRAS CRÍTICAS:
-1. Se NÃO encontrar informações confiáveis, retorne {} (objeto vazio)
-2. NUNCA invente dimensões, preços ou características
-3. Use apenas informações que você TEM CERTEZA que são sobre ESTE PRODUTO ESPECÍFICO
-4. Se houver qualquer dúvida, retorne {}
-
-Retorne JSON apenas se encontrar com CERTEZA:
-{
-  "nome": "nome completo do produto incluindo marca/modelo",
-    "categoria": "uma das opções: Sofá, Cama, Mesa, Cadeira, Armário, Estante, Rack, Poltrona, Escrivaninha, Criado-mudo, Buffet, Aparador, Banco, Travesseiro, Almofada, Decorações, Utensílios, Outros",
-  "material": "material principal real (Madeira, MDF, Metal, Vidro, Tecido, Couro, etc) ou null",
-  "cor": "cor principal do produto ou null",
-  "descricao": "descrição detalhada APENAS com informações que você ENCONTROU",
-  "largura": número em cm ou null,
-  "altura": número em cm ou null,
-  "profundidade": número em cm ou null,
-  "confianca": "alta" | "media" | "baixa"
-}
-
-EXEMPLO BOM (encontrou):
-{
-  "nome": "Sofá Retrátil 3 Lugares Suede Marrom - Império Móveis",
-  "categoria": "Sofá",
-  "material": "Suede",
-  "cor": "Marrom",
-  "descricao": "Sofá retrátil e reclinável para 3 pessoas, estrutura em madeira, revestimento em suede",
-  "largura": 230,
-  "altura": 90,
-  "profundidade": 95,
-  "confianca": "alta"
-}
-
-EXEMPLO RUIM (não encontrou ou incerto):
-{}`;
-
-        const result = await model.generateContent(prompt);
-        const responseText = result.response.text();
-
-        try {
-            // Limpeza básica de markdown se houver
-            const cleanJson = responseText.replace(/```json\n?|\n?```/g, "").trim();
-            const jsonData = JSON.parse(cleanJson);
-            res.json(jsonData);
-        } catch (parseError) {
-            console.error("Erro ao parsear resposta da IA:", parseError);
-            res.json({});
-        }
-
-    } catch (error) {
-        console.error("Erro ao buscar produto com IA:", error);
-        res.status(500).json({ error: "Erro ao processar solicitação: " + error.message });
     }
 });
 
@@ -1734,35 +1614,7 @@ client.on('message', async msg => {
 */
 
 // --- ROTA PROXY: DOWNLOAD DE XML NFE (EVITA CORS) ---
-app.get('/nfe-xml/:documentoId', async (req, res) => {
-    const { documentoId } = req.params;
-    const authHeader = req.headers.authorization;
 
-    if (!authHeader) {
-        return res.status(401).json({ error: "Authorization header required" });
-    }
-
-    try {
-        // Faz a requisicao para a API Nuvem Fiscal
-        const response = await fetch(`https://api.nuvemfiscal.com.br/distribuicao/nfe/documentos/${documentoId}/xml`, {
-            method: 'GET',
-            headers: { 'Authorization': authHeader },
-            redirect: 'follow' // Segue o redirect para o S3
-        });
-
-        if (!response.ok) {
-            return res.status(response.status).json({ error: "Erro ao baixar XML" });
-        }
-
-        const xmlContent = await response.text();
-        res.set('Content-Type', 'application/xml');
-        res.send(xmlContent);
-
-    } catch (error) {
-        console.error("Erro no proxy NFe:", error);
-        res.status(500).json({ error: error.message });
-    }
-});
 
 // Limpeza de filas antigas (24h)
 setInterval(() => {
@@ -1802,7 +1654,7 @@ app.post('/concluir-entrega', async (req, res) => {
         const { data: entregaAlvo, error: entregaAlvoErr } = await supabase
             .from('entregas')
             .select('id, venda_id, numero_pedido')
-            .eq('id', id_concluida)
+            .eq('id', id_concluida).eq('organization_id', req.auth.organizationId)
             .single();
 
         if (entregaAlvoErr || !entregaAlvo) {
@@ -1812,6 +1664,7 @@ app.post('/concluir-entrega', async (req, res) => {
         let montagemPendenteQuery = supabase
             .from('montagens_itens')
             .select('id', { count: 'exact', head: true })
+            .eq('organization_id', req.auth.organizationId)
             .eq('tipo_montagem', 'interna')
             .neq('status', 'concluida');
 
@@ -1840,13 +1693,13 @@ app.post('/concluir-entrega', async (req, res) => {
         const updatePayload = {
             status: 'Entregue',
             data_realizada: new Date().toISOString(),
-            ...(req.body.update_data || {}) // Inclui fotos, assinatura, geolocalização
+            ...Object.fromEntries(Object.entries(req.body.update_data || {}).filter(([key]) => ['fotos_entrega','foto_entrega_url','assinatura_url','latitude','longitude','observacoes_entrega'].includes(key))) // Inclui fotos, assinatura, geolocalização
         };
 
         const { data: entregaAtual, error: err1 } = await supabase
             .from('entregas')
             .update(updatePayload)
-            .eq('id', id_concluida)
+            .eq('id', id_concluida).eq('organization_id', req.auth.organizationId)
             .select('caminhao_id, ordem_rota, cliente_nome, cliente_telefone, numero_pedido')
             .single();
 
@@ -1896,7 +1749,7 @@ Aproveite seus móveis! ✨`;
                 const { data: candidatas, error: err2 } = await supabase
                     .from('entregas')
                     .select('*')
-                    .eq('caminhao_id', entregaAtual.caminhao_id)
+                    .eq('caminhao_id', entregaAtual.caminhao_id).eq('organization_id', req.auth.organizationId)
                     .gt('ordem_rota', entregaAtual.ordem_rota)
                     .order('ordem_rota', { ascending: true })
                     .limit(20);
@@ -1916,7 +1769,7 @@ Aproveite seus móveis! ✨`;
                 await supabase
                     .from('entregas')
                     .update({ status: 'Próxima parada' })
-                    .eq('id', proximaEntrega.id);
+                    .eq('id', proximaEntrega.id).eq('organization_id', req.auth.organizationId);
 
                 // 5. Disparar o aviso via Rota 4 (Internamente)
                 const baseUrl = getTrackingBaseUrl();
@@ -1970,7 +1823,7 @@ Prepare-se para receber seus móveis em breve.
 // MOVED TO END: Must be after all API routes to avoid intercepting them
 app.use((req, res, next) => {
     // Skip API routes - let them fall through to 404 handler
-    if (req.path.startsWith('/whatsapp') || req.path.startsWith('/nfe-xml') || req.path.startsWith('/buscar') || req.path.startsWith('/enviar') || req.path.startsWith('/api')) {
+    if (req.path.startsWith('/whatsapp') || req.path.startsWith('/buscar') || req.path.startsWith('/enviar') || req.path.startsWith('/api')) {
         return next();
     }
     const indexPath = path.join(distPath, 'index.html');

@@ -1,3 +1,4 @@
+import { getAuthContext, requireAdmin, requireOrganization, deny } from "../_shared/authContext.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
@@ -21,43 +22,19 @@ serve(async (req) => {
     };
 
     try {
-        const authHeader = req.headers.get('Authorization');
-        if (!authHeader) return returnError('Missing Authorization header');
-
-        const token = authHeader.replace('Bearer ', '').trim();
-        if (!token) return returnError('Token vazio no header Authorization');
-
-        const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-        const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-
-        // Criar admin client primeiro (usado para todas operações)
-        const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
-            auth: { persistSession: false }
-        });
-
-        // Validar o token do usuário chamador usando admin client
-        const { data: { user }, error: userError } = await supabaseAdmin.auth.getUser(token);
-
-        if (userError || !user) {
-            return returnError('Unauthorized: ' + (userError?.message || 'Token inválido/expirado'));
-        }
-
-        const { data: userData, error: profileError } = await supabaseAdmin
-            .from('public_users')
-            .select('cargo')
-            .eq('id', user.id)
-            .single();
-
-        if (profileError || userData?.cargo !== 'Administrador') {
-            return returnError('Acesso negado. Apenas administradores podem realizar esta ação.');
-        }
+        const ctx = await getAuthContext(req);
+        requireAdmin(ctx);
+        const supabaseAdmin = ctx.adminClient;
+        const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+        const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
         // Gerador de senha simples e robusto
         const generatePassword = () => {
             const chars = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789";
             let pass = "";
+            const random = crypto.getRandomValues(new Uint32Array(10));
             for (let i = 0; i < 10; i++) {
-                pass += chars.charAt(Math.floor(Math.random() * chars.length));
+                pass += chars.charAt(random[i] % chars.length);
             }
             return pass + "A1!";
         };
@@ -79,12 +56,13 @@ serve(async (req) => {
             // Buscar email e dados atuais do usuário alvo
             const { data: targetUser, error: targetError } = await supabaseAdmin
                 .from('public_users')
-                .select('email, full_name, matricula, primeiro_acesso')
+                .select('email, full_name, matricula, primeiro_acesso, organization_id')
                 .eq('id', user_id)
                 .single();
 
             if (targetError || !targetUser) return returnError('Usuário alvo não encontrado na base pública.');
 
+            requireOrganization(ctx, targetUser.organization_id);
             const tempPassword = generatePassword();
             const matricula = targetUser.matricula || ('MAT' + Math.floor(1000 + Math.random() * 9000));
 
@@ -142,6 +120,10 @@ serve(async (req) => {
                             const existingAuthUser = usersList.find(u => u.email === targetUser.email);
 
                             if (existingAuthUser) {
+                                const { data: existingProfile, error: existingError } = await supabaseAdmin
+                                    .from('public_users').select('organization_id').eq('id', existingAuthUser.id).single();
+                                if (existingError || !existingProfile) deny(403, 'Identidade divergente requer reconciliação manual');
+                                requireOrganization(ctx, existingProfile.organization_id);
                                 console.log(`Usuário encontrado no Auth com ID: ${existingAuthUser.id}. Sincronizando...`);
 
                                 // 1. Atualizar a senha deste usuário encontrado
@@ -182,6 +164,7 @@ serve(async (req) => {
                     }
 
                 } catch (createEx) {
+                    if (createEx instanceof Response) return createEx;
                     return returnError("Exceção no processo de Create/Sync: " + createEx.message);
                 }
             }
@@ -230,6 +213,7 @@ serve(async (req) => {
         return returnError('Ação inválida: ' + action);
 
     } catch (error) {
+        if (error instanceof Response) return error;
         return new Response(
             JSON.stringify({ error: "Erro Interno: " + error.message }),
             { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

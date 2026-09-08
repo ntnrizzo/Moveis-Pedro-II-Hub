@@ -4,7 +4,7 @@ import { saveToOfflineQueue, getOfflineQueue, removeOfflineQueueItem, clearOffli
 import { buildTrackingUrl, buildClientPortalUrl, buildAssistenciaUrl } from "@/utils/tenantLinkHelper";
 
 // 🔐 Chave de API compartilhada com o backend do bot
-const BOT_API_KEY = import.meta.env.VITE_BOT_API_SECRET || '';
+import { getBotAuthHeaders } from '@/utils/botAuth';
 
 /**
  * Obtém o organization_id ativo (do localStorage ou padrão)
@@ -19,14 +19,13 @@ function getActiveOrgId(customOrgId = null) {
 }
 
 /** Headers padrão para chamadas ao bot, incluindo API key de autenticação e tenant ID */
-function botHeaders(extra = {}, orgId = null) {
+async function botHeaders(extra = {}, orgId = null) {
     const activeOrgId = getActiveOrgId(orgId);
-    return {
+    return getBotAuthHeaders({
         'Content-Type': 'application/json',
-        ...(BOT_API_KEY ? { 'x-bot-api-key': BOT_API_KEY } : {}),
         'x-organization-id': activeOrgId,
         ...extra,
-    };
+    });
 }
 
 
@@ -63,7 +62,7 @@ export const whatsappService = {
     checkStatus: async () => {
         try {
             const response = await fetch(`${API_URL}/status`, {
-                headers: botHeaders(),
+                headers: await botHeaders(),
             });
             if (!response.ok) return false;
 
@@ -94,7 +93,7 @@ export const whatsappService = {
         try {
             const response = await fetch(`${API_URL}/send-text`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(payload),
             });
 
@@ -139,7 +138,7 @@ export const whatsappService = {
         try {
             const response = await fetch(`${API_URL}/send-image-url`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(payload),
             });
 
@@ -217,7 +216,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/aviso-proxima-parada`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify({
                     id: entrega.id,
                     telefone: telefone || entrega.cliente_telefone,
@@ -288,7 +287,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/aviso-inicio-rota`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify({ entregas })
             });
             if (!response.ok) {
@@ -323,7 +322,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/concluir-entrega`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify({
                     id_concluida: idConcluida,
                     update_data: updateData
@@ -359,7 +358,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/disparar-confirmacoes`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify({ entregas })
             });
             if (!response.ok) {
@@ -393,7 +392,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/reagendar-entregas`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify({ entregas })
             });
             if (!response.ok) {
@@ -426,7 +425,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/aviso-montagem-agendada`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(data)
             });
             if (!response.ok) {
@@ -459,7 +458,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/aviso-montagem-cancelada`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(data)
             });
             if (!response.ok) {
@@ -492,7 +491,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/aviso-montagem-reagendada`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(data)
             });
             if (!response.ok) {
@@ -525,7 +524,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/enviar-mensagem-marketing`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(data)
             });
             if (!response.ok) {
@@ -562,7 +561,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/mensagem-pos-venda`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(data)
             });
 
@@ -606,7 +605,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const response = await fetch(`${API_URL}/enviar-mensagem-aniversario`, {
                 method: 'POST',
-                headers: botHeaders(),
+                headers: await botHeaders(),
                 body: JSON.stringify(data)
             });
 
@@ -643,7 +642,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
 
             try {
                 const response = await fetch(`${API_URL}/whatsapp/queue/pending`, {
-                    headers: botHeaders()
+                    headers: await botHeaders()
                 });
                 if (response.ok) {
                     const data = await response.json();
@@ -703,7 +702,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const res = await fetch(`${API_URL}/whatsapp/queue/process`, {
                 method: 'POST',
-                headers: botHeaders()
+                headers: await botHeaders()
             });
             backendOk = res.ok;
         } catch (err) {
@@ -729,7 +728,7 @@ Acompanhe a entrega em tempo real pelo link abaixo:
         try {
             const res = await fetch(`${API_URL}/whatsapp/queue/clear`, {
                 method: 'POST',
-                headers: botHeaders()
+                headers: await botHeaders()
             });
             if (res.ok) {
                 const data = await res.json();

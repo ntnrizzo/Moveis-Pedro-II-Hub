@@ -195,7 +195,7 @@ function OperatorRouteGate() {
 
 
 const PAGES = {
-    Dashboard, Produtos, Clientes, Vendas, Devolucoes, Orcamentos, AssistenciaTecnica,
+    Dashboard, Produtos, Clientes, Vendas, Pedidos: Vendas, Devolucoes, Orcamentos, AssistenciaTecnica,
     Configuracoes, SelecaoVendedor,
     BoasVindas, GerenciamentoUsuarios, Financeiro, Montagem, Fornecedores, Compras,
     Inventario, Estoque, ModoReuniao, PDV, CatalogoWhatsApp,
@@ -570,6 +570,7 @@ function PagesContent() {
                         <Route path="/admin/Dashboard" element={<Dashboard />} />
                         <Route path="/admin/PDV" element={<PDV />} />
                         <Route path="/admin/Vendas" element={<Vendas />} />
+                        <Route path="/admin/Pedidos" element={<Vendas />} />
                         <Route path="/admin/Devolucoes" element={<Devolucoes />} />
                         <Route path="/admin/Orcamentos" element={<Orcamentos />} />
                         <Route path="/admin/CRM" element={<CRM />} />
