@@ -12,7 +12,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:security": "vitest run src/utils/securityIdentity.test.js src/utils/securityEdge.test.js src/utils/securityDatabase.test.js",
+    "test:security": "vitest run src/utils/securityIdentity.test.js src/utils/securityEdge.test.js src/utils/securityDatabase.test.js src/utils/financialPermissions.test.js src/utils/financialCreation.test.js",
     "test:migrations:replay": "node tests/security/replay-migrations.mjs"
   },
   "dependencies": {

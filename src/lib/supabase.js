@@ -355,11 +355,13 @@ const createHandler = (tableName) => ({
             } catch (e) { /* ignore */ }
         }
 
-        const { error } = await supabase.from(tableName).delete().eq('id', id);
+        const { data: deleted, error } = await supabase.from(tableName).delete().eq('id', id).select('id');
         if (error) {
             console.error(`Erro Supabase (Deletar ${id} em ${tableName}):`, error);
             throw error;
         }
+
+        if (!deleted?.length) throw new Error("Registro não encontrado ou sem permissão para excluir.");
 
         // Audit Log
         if (tableName !== 'audit_logs') {

@@ -34,7 +34,7 @@ import {
 export default function AlteracaoEmMassaModal({ open, onOpenChange, lancamentos = [], categorias = [] }) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
 
   // Estados locais do modal
   const [busca, setBusca] = useState("");
@@ -148,6 +148,7 @@ export default function AlteracaoEmMassaModal({ open, onOpenChange, lancamentos 
 
   // Executar alteração em massa
   const executarAlteracaoEmMassa = async () => {
+    if (!can("manage_financeiro")) return;
     if (selectedIds.size === 0) return;
 
     setIsExecuting(true);
@@ -218,7 +219,7 @@ export default function AlteracaoEmMassaModal({ open, onOpenChange, lancamentos 
     `R$ ${Math.abs(val || 0).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
+    <Dialog open={open && can("manage_financeiro")} onOpenChange={handleClose}>
       <DialogContent className="max-w-4xl max-h-[92vh] overflow-hidden flex flex-col p-0">
         <DialogHeader className="p-5 pb-3 border-b bg-gray-50/50 dark:bg-neutral-900/50">
           <div className="flex items-center justify-between">

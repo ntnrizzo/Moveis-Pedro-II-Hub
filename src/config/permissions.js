@@ -233,7 +233,7 @@ export const PERMISSION_CATALOG = [
 
   // Financeiro
   { code: 'view_financeiro',    label: 'Ver Financeiro',        category: 'Financeiro', description: 'Visualizar dados financeiros e lançamentos' },
-  { code: 'manage_financeiro',  label: 'Gerenciar Financeiro',  category: 'Financeiro', description: 'Gerenciar lançamentos e contas financeiras' },
+  { code: 'manage_financeiro',  label: 'Gerenciar Financeiro',  category: 'Financeiro', description: 'Criar, editar e dar baixa em lançamentos, gerar recorrências e criar categorias. Exclusão e edição de categorias são exclusivas do administrador.' },
 
   // Relatórios
   { code: 'view_relatorios',             label: 'Ver Relatórios e Análises',    category: 'Relatórios', description: 'Acessar relatórios e central analítica' },

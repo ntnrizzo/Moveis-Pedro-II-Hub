@@ -1,3 +1,5 @@
+import { toast } from "sonner";
+import { financialErrorMessage } from "@/lib/financialCapabilities";
 import React, { useMemo, useState, useEffect } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -90,7 +92,9 @@ const parseMoneyForComparison = (raw) => {
 export default function LancamentosList({ lancamentos = [], categorias = [], isLoading, onlyModal = false }) {
   const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canManage = can("manage_financeiro");
+  const canDelete = can("delete_financial_entry");
   const [selectedLancamento, setSelectedLancamento] = useState(null);
   const [isDetalhesOpen, setIsDetalhesOpen] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
@@ -128,6 +132,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
 
   const deleteMutation = useMutation({
     mutationFn: async (target) => {
+      if (!canDelete) throw new Error("Somente administrador pode excluir lançamentos.");
       if (typeof target === "object" && target !== null) {
         if (isLancamentoRecorrente(target)) {
           return await encerrarEExcluirRecorrencia(target, base44);
@@ -138,18 +143,23 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['lancamentos-financeiros'] });
-    }
+    },
+    onError: error => toast.error(financialErrorMessage(error)),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.LancamentoFinanceiro.update(id, data),
+    mutationFn: ({ id, data }) => {
+      if (!canManage) throw new Error("Sem permissão para alterar lançamentos.");
+      return base44.entities.LancamentoFinanceiro.update(id, data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['lancamentos-financeiros'] });
-    }
+    },
+    onError: error => toast.error(financialErrorMessage(error)),
   });
 
   const { data: paidAuditLogs = [] } = useQuery({
-    queryKey: ['audit-mark-paid'],
+    queryKey: ['audit-mark-paid', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.AuditLog.list('-created_at') || [],
     staleTime: 30000,
   });
@@ -206,6 +216,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
   }, [categorias]);
 
   const handleStatusChange = async (id, newStatus) => {
+    if (!canManage) return;
     const lanc = lancamentos.find((item) => item.id === id);
     if (!lanc) return;
 
@@ -309,6 +320,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
   };
 
   const handleAnexoUpload = async (event) => {
+    if (!canManage) return;
     const file = event.target.files?.[0];
     if (!file) return;
 
@@ -324,6 +336,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
   };
 
   const handleSaveDetalhes = () => {
+    if (!canManage) return;
     if (!selectedLancamento) return;
     setDetalhesError("");
 
@@ -369,7 +382,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
           setIsEditing(false);
         },
         onError: (error) => {
-          setDetalhesError(error?.message || "Erro ao salvar o lançamento.");
+          setDetalhesError(financialErrorMessage(error));
         }
       }
     );
@@ -377,6 +390,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
 
   // Abre o modal rígido de exclusão (para qualquer lançamento)
   const handleDelete = (lanc) => {
+    if (!canDelete) return;
     setSelectedLancamento(lanc);
     setDeleteConfirmNome("");
     setDeleteConfirmValor("");
@@ -386,6 +400,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
 
   // Alias usado dentro do modal de detalhes
   const abrirDeletePago = () => {
+    if (!canDelete) return;
     setDeleteConfirmNome("");
     setDeleteConfirmValor("");
     setDeleteConfirmError("");
@@ -394,6 +409,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
 
   // Valida e executa a exclusão do lançamento
   const confirmarDeletePago = () => {
+    if (!canDelete) return;
     const lanc = selectedLancamento;
     if (!lanc) return;
 
@@ -484,7 +500,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
         <Select
           value={lanc.status || 'Pendente'}
           onValueChange={(value) => handleStatusChange(lanc.id, value)}
-          disabled={updateMutation.isPending}
+          disabled={!canManage || updateMutation.isPending}
         >
           <SelectTrigger className="h-7 w-[100px] text-[10px] border-0 bg-transparent hover:bg-gray-100 dark:hover:bg-neutral-800">
             <SelectValue>
@@ -627,7 +643,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
                               e.stopPropagation();
                               handleDelete(lanc);
                             }}
-                            disabled={deleteMutation.isPending}
+                            disabled={!canDelete || deleteMutation.isPending}
                           >
                             <Trash2 className="w-3 h-3" />
                           </Button>
@@ -658,6 +674,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
               </div>
               <Button
                 type="button"
+                disabled={!canManage}
                 variant={isEditing ? "secondary" : "outline"}
                 onClick={() => {
                   setDetalhesError("");
@@ -957,7 +974,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
                     variant="destructive"
                     className="flex items-center gap-2 opacity-90 hover:opacity-100"
                     onClick={abrirDeletePago}
-                    disabled={deleteMutation.isPending}
+                    disabled={!canDelete || deleteMutation.isPending}
                   >
                     <Trash2 className="w-4 h-4" />
                     Cancelar e Excluir
@@ -965,7 +982,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
                 )}
                 <div className="flex-1" />
                 {isEditing && (
-                  <Button type="button" onClick={handleSaveDetalhes} disabled={updateMutation.isPending || uploadingAnexo}>
+                  <Button type="button" onClick={handleSaveDetalhes} disabled={!canManage || updateMutation.isPending || uploadingAnexo}>
                     <Save className="w-4 h-4 mr-2" />
                     {updateMutation.isPending ? "Salvando..." : "Salvar alterações"}
                   </Button>
@@ -1031,7 +1048,8 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
 
             <Button
               type="button"
-              onClick={() => setIsBulkModalOpen(true)}
+              disabled={!canManage}
+              onClick={() => { if (canManage) setIsBulkModalOpen(true); }}
               variant="outline"
               className="h-9 gap-2 border-emerald-600 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500 dark:text-emerald-400 dark:hover:bg-emerald-950/40 font-semibold"
             >
@@ -1091,6 +1109,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
               </div>
               <Button
                 type="button"
+                disabled={!canManage}
                 variant={isEditing ? "secondary" : "outline"}
                 onClick={() => {
                   setDetalhesError("");
@@ -1390,7 +1409,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
                     variant="destructive"
                     className="flex items-center gap-2 opacity-90 hover:opacity-100"
                     onClick={abrirDeletePago}
-                    disabled={deleteMutation.isPending}
+                    disabled={!canDelete || deleteMutation.isPending}
                   >
                     <Trash2 className="w-4 h-4" />
                     Cancelar e Excluir
@@ -1398,7 +1417,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
                 )}
                 <div className="flex-1" />
                 {isEditing && (
-                  <Button type="button" onClick={handleSaveDetalhes} disabled={updateMutation.isPending || uploadingAnexo}>
+                  <Button type="button" onClick={handleSaveDetalhes} disabled={!canManage || updateMutation.isPending || uploadingAnexo}>
                     <Save className="w-4 h-4 mr-2" />
                     {updateMutation.isPending ? "Salvando..." : "Salvar alterações"}
                   </Button>
@@ -1515,7 +1534,7 @@ export default function LancamentosList({ lancamentos = [], categorias = [], isL
                   type="button"
                   variant="destructive"
                   onClick={confirmarDeletePago}
-                  disabled={deleteMutation.isPending}
+                  disabled={!canDelete || deleteMutation.isPending}
                 >
                   <Trash2 className="w-4 h-4 mr-2" />
                   {deleteMutation.isPending ? "Excluindo..." : "Confirmar exclusão"}

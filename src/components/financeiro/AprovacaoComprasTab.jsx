@@ -1,3 +1,4 @@
+import { useAuth } from "@/hooks/useAuth";
 import React, { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { base44 } from "@/lib/supabase";
@@ -15,6 +16,7 @@ import { toast } from "sonner";
 import { useConfirm } from "@/hooks/useConfirm";
 
 function OcApprovalCard({ oc, categorias, currentUser }) {
+  const { can } = useAuth();
   const solicitacao = oc.metadata?.solicitacao_financeiro || {};
   const [form, setForm] = useState({
     categoria_id: solicitacao.categoria_id || "",
@@ -29,6 +31,7 @@ function OcApprovalCard({ oc, categorias, currentUser }) {
 
   const aprovaMutation = useMutation({
     mutationFn: async () => {
+      if (!can("approve_payment_oc")) throw new Error("Sem permissão para aprovar pagamento de compras.");
       const statusLancamento = form.ja_pago ? "Pago" : "Pendente";
       const categoriaObj = categorias.find(c => c.id === form.categoria_id);
       const ultimoAnexo = oc.anexos_financeiro?.[oc.anexos_financeiro.length - 1];
@@ -71,6 +74,7 @@ function OcApprovalCard({ oc, categorias, currentUser }) {
 
   const cancelaMutation = useMutation({
     mutationFn: async () => {
+      if (!can("approve_payment_oc")) throw new Error("Sem permissão para aprovar pagamento de compras.");
       await base44.entities.ComprasOrden.update(oc.id, {
         status: "Cancelada",
         pagamento_status: "nao_aplicavel",
@@ -288,6 +292,8 @@ function OcApprovalCard({ oc, categorias, currentUser }) {
 }
 
 export default function AprovacaoComprasTab({ ocs, categorias, isLoading, currentUser }) {
+  const { can } = useAuth();
+  if (!can('approve_payment_oc')) return null;
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">

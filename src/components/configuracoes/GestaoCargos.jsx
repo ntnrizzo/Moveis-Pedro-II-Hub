@@ -97,6 +97,7 @@ export default function GestaoCargos() {
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['role_permissions'] });
+            window.dispatchEvent(new Event('financial-permissions-changed'));
             setEditingCargo(null);
             toast.success('Permissões do cargo atualizadas!');
         },
@@ -124,6 +125,7 @@ export default function GestaoCargos() {
         },
         onSuccess: (_, { nome }) => {
             queryClient.invalidateQueries({ queryKey: ['role_permissions'] });
+            window.dispatchEvent(new Event('financial-permissions-changed'));
             setCriarCargoOpen(false);
             setNovoCargo({ nome: '', cor: '#6b7280', escopo: SCOPES.OWN, descricao: '' });
             toast.success(`Cargo "${nome.trim()}" criado! Configure as permissões clicando em "Editar Permissões".`);
@@ -140,6 +142,7 @@ export default function GestaoCargos() {
         },
         onSuccess: (_, cargo) => {
             queryClient.invalidateQueries({ queryKey: ['role_permissions'] });
+            window.dispatchEvent(new Event('financial-permissions-changed'));
             setConfirmarExcluir(null);
             toast.success(`Cargo "${cargo}" excluído.`);
         },

@@ -47,6 +47,8 @@ function weekKey(isoDate) {
 }
 
 function ItemRow({ lanc, onStatusChange, onEnableRecurring, updating, recurringUpdateId }) {
+  const { can } = useAuth();
+  const canManage = can("manage_financeiro");
   const venc = lanc.data_vencimento
     ? new Date(lanc.data_vencimento + "T00:00:00").toLocaleDateString("pt-BR")
     : "—";
@@ -81,7 +83,7 @@ function ItemRow({ lanc, onStatusChange, onEnableRecurring, updating, recurringU
             type="button"
             variant="outline"
             className="h-6 px-2 text-[10px]"
-            disabled={salvandoRecorrencia}
+            disabled={!canManage || salvandoRecorrencia}
             onClick={(e) => {
               e.stopPropagation();
               onEnableRecurring(lanc);
@@ -95,7 +97,7 @@ function ItemRow({ lanc, onStatusChange, onEnableRecurring, updating, recurringU
             <Select
               value={lanc.status}
               onValueChange={(value) => onStatusChange(lanc, value)}
-              disabled={updating}
+              disabled={!canManage || updating}
             >
               <SelectTrigger className="h-6 w-[90px] text-[10px] border-0 bg-transparent hover:bg-gray-100 dark:hover:bg-neutral-800">
                 <SelectValue>
@@ -175,7 +177,8 @@ export default function VencimentosProximos({ lancamentos = [] }) {
   const hoje = startOfDay(new Date());
   const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canManage = can("manage_financeiro");
   const [updatingId, setUpdatingId] = useState(null);
   const [recurringUpdateId, setRecurringUpdateId] = useState(null);
   const [visibleWeeks, setVisibleWeeks] = useState(3);
@@ -252,6 +255,7 @@ export default function VencimentosProximos({ lancamentos = [] }) {
   });
 
   const handleStatusChange = async (lanc, newStatus) => {
+    if (!canManage) return;
     if (lanc.status === newStatus) return;
     const previousStatus = lanc.status || "Pendente";
     const isMarkingAsPaid = newStatus === "Pago" && previousStatus !== "Pago";
@@ -299,6 +303,7 @@ export default function VencimentosProximos({ lancamentos = [] }) {
   };
 
   const handleEnableRecurring = async (lanc) => {
+    if (!canManage) return;
     if (!lanc?.id || lanc.recorrente) return;
 
     const confirmed = await confirm({

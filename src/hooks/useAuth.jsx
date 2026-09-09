@@ -3,6 +3,7 @@ import { base44, supabase } from "@/api/base44Client";
 import { getActiveAuthMode, setActiveAuthMode, clearActiveAuthMode, AUTH_MODES } from "@/lib/supabase";
 import { ROLE_RULES, SCOPES, userCan, getUserRoles, getHighestScope, hasRole, getUserEffectivePermissions } from "@/config/permissions";
 import { canAccessLojaId, filterDataByLoja } from "@/lib/utils";
+import { FINANCIAL_CAPABILITIES, createFinancialAccessLoader } from '@/lib/financialCapabilities';
 
 const AuthContext = createContext(null);
 
@@ -24,6 +25,24 @@ export function AuthProvider({ children }) {
   const [authType, setAuthType] = useState(null); // 'employee' | 'supabase' | null
   const [authError, setAuthError] = useState(null);
   const [authAttempt, setAuthAttempt] = useState(0);
+  const [financialAccess, setFinancialAccess] = useState(null);
+
+  useEffect(() => {
+    setFinancialAccess(null);
+    if (!user?.id || !user?.organization_id) return;
+    const loader = createFinancialAccessLoader(supabase, user, setFinancialAccess);
+    const refresh = loader.refresh;
+    void refresh();
+    window.addEventListener('focus', refresh);
+    window.addEventListener('financial-permissions-changed', refresh);
+    const interval = setInterval(refresh, 60000);
+    return () => {
+      loader.dispose();
+      clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('financial-permissions-changed', refresh);
+    };
+  }, [user, authAttempt]);
 
   // Admin Store Selection State
   const [selectedStore, setSelectedStoreState] = useState(() => {
@@ -391,6 +410,12 @@ export function AuthProvider({ children }) {
   // Verifica permissão - primeiro tenta banco, depois fallback hardcoded
   const can = (permission) => {
     if (!user) return false;
+    if (Array.isArray(permission)) return permission.some(p => can(p));
+    if (FINANCIAL_CAPABILITIES.has(permission)) {
+      return user.ativo !== false && financialAccess?.user_id === user.id &&
+        financialAccess?.organization_id === user.organization_id &&
+        financialAccess?.[permission] === true;
+    }
 
     const roles = getUserRoles(user);
     if (!roles.length) return false;

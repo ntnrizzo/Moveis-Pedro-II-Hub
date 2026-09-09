@@ -216,45 +216,18 @@ export function extractRecorrenciaParentId(lancamento) {
 }
 
 export async function encerrarEExcluirRecorrencia(lancamento, base44) {
-  if (!lancamento || !base44) return;
-
-  const lancamentoId = lancamento.id;
-  const dataCorte = lancamento.data_vencimento || lancamento.data_lancamento;
-  const parentId = extractRecorrenciaParentId(lancamento);
-
-  if (parentId) {
-    // Desativa a recorrência no lançamento pai
-    try {
-      await base44.entities.LancamentoFinanceiro.update(parentId, {
-        recorrente: false,
-      });
-    } catch (err) {
-      console.warn("Erro ao atualizar status do lançamento pai da recorrência:", err);
-    }
-
-    // Busca lançamentos filhos gerados que tenham data >= dataCorte para excluir
-    try {
-      const todos = await base44.entities.LancamentoFinanceiro.list();
-      const prefixo = `recorrencia:${parentId}:`;
-
-      const filhosParaExcluir = todos.filter((item) => {
-        if (item.id === lancamentoId) return false;
-        if (item.origem_ref && item.origem_ref.startsWith(prefixo)) {
-          const itemData = item.data_vencimento || item.data_lancamento;
-          return itemData >= dataCorte;
-        }
-        return false;
-      });
-
-      for (const filho of filhosParaExcluir) {
-        await base44.entities.LancamentoFinanceiro.delete(filho.id);
-      }
-    } catch (err) {
-      console.warn("Erro ao buscar/excluir ocorrências futuras da recorrência:", err);
-    }
+  if (!lancamento?.id) throw new Error('Lançamento não informado.');
+  const { supabase } = await import('@/lib/supabase');
+  const { data, error } = await supabase.rpc('delete_financial_recurrence', { p_id: lancamento.id });
+  if (error) throw error;
+  if (!data?.deleted_ids?.length) throw new Error('Nenhum lançamento foi removido.');
+  try {
+    await base44.entities.AuditLog.create({
+      acao: 'DELETE_RECURRENCE', tabela: 'lancamentos_financeiros',
+      detalhes: { record_id: lancamento.id, deleted_ids: data.deleted_ids },
+    });
+  } catch {
+    console.warn('Exclusão concluída; não foi possível registrar a auditoria complementar.');
   }
-
-  // Deleta o lançamento selecionado
-  await base44.entities.LancamentoFinanceiro.delete(lancamentoId);
+  return data;
 }
-

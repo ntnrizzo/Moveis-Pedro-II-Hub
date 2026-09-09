@@ -1,3 +1,5 @@
+import { toast } from "sonner";
+import { financialErrorMessage } from "@/lib/financialCapabilities";
 import React, { useState, useEffect, useRef } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -36,21 +38,36 @@ export default function RecorrentesManager({ lancamentos }) {
   const autoProcessedRef = useRef(false);
   const queryClient = useQueryClient();
   const confirm = useConfirm();
-  const { user } = useAuth();
+  const { user, can } = useAuth();
+  const canManage = can("manage_financeiro");
+  const canDelete = can("delete_financial_entry");
+  const generationScope = `${user?.id}:${user?.organization_id}:${canManage}`;
+  const latestScope = useRef(generationScope);
+  latestScope.current = generationScope;
+  useEffect(() => () => { latestScope.current = null; }, []);
+  useEffect(() => { autoProcessedRef.current = false; }, [generationScope]);
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.LancamentoFinanceiro.create(data),
+    mutationFn: (data) => {
+      if (!canManage) throw new Error("Sem permissão para gerar recorrências.");
+      return base44.entities.LancamentoFinanceiro.create({ ...data, organization_id: user.organization_id });
+    },
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.LancamentoFinanceiro.update(id, data),
+    mutationFn: ({ id, data }) => {
+      if (!canManage) throw new Error("Sem permissão para alterar lançamentos.");
+      return base44.entities.LancamentoFinanceiro.update(id, data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['lancamentos-financeiros'] });
-    }
+    },
+    onError: error => toast.error(financialErrorMessage(error)),
   });
 
   const deleteMutation = useMutation({
     mutationFn: async (target) => {
+      if (!canDelete) throw new Error("Somente administrador pode excluir lançamentos.");
       if (typeof target === "object" && target !== null) {
         if (isLancamentoRecorrente(target)) {
           return await encerrarEExcluirRecorrencia(target, base44);
@@ -61,10 +78,12 @@ export default function RecorrentesManager({ lancamentos }) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['lancamentos-financeiros'] });
-    }
+    },
+    onError: error => toast.error(financialErrorMessage(error)),
   });
 
   const handleStatusChange = async (id, newStatus) => {
+    if (!canManage) return;
     const lanc = lancamentos.find((item) => item.id === id);
     if (!lanc) return;
 
@@ -115,6 +134,7 @@ export default function RecorrentesManager({ lancamentos }) {
   };
 
   const handleDelete = async (lanc) => {
+    if (!canDelete) return;
     const dataRef = formatBrazilDate(lanc.data_vencimento || lanc.data_lancamento);
     const confirmed = await confirm({
       title: 'Excluir e encerrar recorrência',
@@ -133,6 +153,7 @@ export default function RecorrentesManager({ lancamentos }) {
   };
 
   const gerarLancamentosRecorrentes = async () => {
+    if (!canManage) return;
     setProcessing(true);
     setResult(null);
 
@@ -149,6 +170,7 @@ export default function RecorrentesManager({ lancamentos }) {
       const lancamentosAtualizados = [...lancamentos];
 
       for (const lanc of recorrentes) {
+        if (latestScope.current !== generationScope) return;
         const tipoRecorrencia = getRecorrenciaTipo(lanc.recorrencia_tipo);
         const dataBase = getRecorrenciaAnchorDate(lanc);
         if (!dataBase) {
@@ -163,6 +185,7 @@ export default function RecorrentesManager({ lancamentos }) {
         }
 
         while (competencia && competencia <= limiteIso) {
+          if (latestScope.current !== generationScope) return;
           if (!isRecurringOccurrenceDuplicate(lanc, competencia, lancamentosAtualizados)) {
             const origemRef = buildRecurringOccurrenceKey(lanc.id, competencia);
             const novoLancamento = await createMutation.mutateAsync({
@@ -220,19 +243,14 @@ export default function RecorrentesManager({ lancamentos }) {
   };
 
   useEffect(() => {
-    const autoGenerate = async () => {
-      if (autoProcessedRef.current) return;
-
-      const recorrentes = lancamentos.filter(l => l.recorrente === true);
-      if (recorrentes.length > 0) {
-        autoProcessedRef.current = true;
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        gerarLancamentosRecorrentes();
-      }
-    };
-
-    autoGenerate();
-  }, [lancamentos]);
+    if (!canManage || autoProcessedRef.current || !lancamentos.some(l => l.recorrente === true)) return;
+    const timer = setTimeout(() => {
+      if (latestScope.current !== generationScope) return;
+      autoProcessedRef.current = true;
+      void gerarLancamentosRecorrentes();
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [lancamentos, canManage, generationScope]);
 
   const recorrentes = lancamentos.filter(l => l.recorrente === true);
 
@@ -354,7 +372,7 @@ export default function RecorrentesManager({ lancamentos }) {
                     <Select
                       value={lanc.status || 'Pendente'}
                       onValueChange={(val) => handleStatusChange(lanc.id, val)}
-                      disabled={isUpdating}
+                      disabled={!canManage || isUpdating}
                     >
                       <SelectTrigger className="h-7 text-xs border-0 bg-transparent hover:bg-gray-100 dark:hover:bg-neutral-800">
                         <SelectValue>
@@ -404,7 +422,7 @@ export default function RecorrentesManager({ lancamentos }) {
                         e.stopPropagation();
                         handleDelete(lanc);
                       }}
-                      disabled={deleteMutation.isPending}
+                      disabled={!canDelete || deleteMutation.isPending}
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </Button>
@@ -426,7 +444,7 @@ export default function RecorrentesManager({ lancamentos }) {
         <div className="flex justify-end pt-4 border-t" style={{ borderColor: '#E5E0D8' }}>
           <Button
             onClick={gerarLancamentosRecorrentes}
-            disabled={processing || recorrentes.length === 0}
+            disabled={!canManage || processing || recorrentes.length === 0}
             variant="outline"
           >
             <RefreshCw className={`w-4 h-4 mr-2 ${processing ? 'animate-spin' : ''}`} />

@@ -14,7 +14,7 @@ beforeAll(async () => {
     db = new PGlite();
     await db.exec(readFileSync(new URL('../../tests/security/schema-fixture.sql', import.meta.url), 'utf8'));
     const dir = new URL('../../supabase/migrations/', import.meta.url);
-    for (const file of readdirSync(dir).filter(name => name.startsWith('2026090512') || name.startsWith('202609081')).sort()) {
+    for (const file of readdirSync(dir).filter(name => name.startsWith('2026090512') || name.startsWith('202609081') || name.startsWith('2026090912')).sort()) {
         try { await db.exec(readFileSync(new URL(file, dir), 'utf8')); }
         catch (e) { throw new Error(`${file}: ${e.message}`); }
     }

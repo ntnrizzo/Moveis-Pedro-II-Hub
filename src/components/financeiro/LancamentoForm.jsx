@@ -1,3 +1,5 @@
+import { useAuth } from "@/hooks/useAuth";
+import { financialErrorMessage } from "@/lib/financialCapabilities";
 import React, { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -65,6 +67,8 @@ const parseCurrencyToNumber = (formattedValue) => {
 };
 
 export default function LancamentoForm({ categorias }) {
+  const { user, can } = useAuth();
+  const canManage = can("manage_financeiro");
   const todayBrazilISO = getBrazilTodayISO();
 
   const [formData, setFormData] = useState({
@@ -102,7 +106,7 @@ export default function LancamentoForm({ categorias }) {
   const queryClient = useQueryClient();
 
   const { data: todosLancamentos = [] } = useQuery({
-    queryKey: ['lancamentos-financeiros'],
+    queryKey: ['lancamentos-financeiros', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.LancamentoFinanceiro.list('-data_lancamento') || [],
     staleTime: 60000,
   });
@@ -122,8 +126,9 @@ export default function LancamentoForm({ categorias }) {
 
   const createMutation = useMutation({
     mutationFn: async (data) => {
+      if (!canManage) throw new Error("Sem permissão para criar lançamentos.");
       return await withTimeout(
-        base44.entities.LancamentoFinanceiro.create(data),
+        base44.entities.LancamentoFinanceiro.create({ ...data, organization_id: user.organization_id }),
         15000,
         'salvar o lançamento'
       );
@@ -146,17 +151,17 @@ export default function LancamentoForm({ categorias }) {
       setValidationError("");
       setCategoriaModo("select");
       setOutrosNome("");
+      setDisplayDates({ data_lancamento: isoToDisplay(todayBrazilISO), data_vencimento: "" });
     },
     onError: (err) => {
-      const message = err?.message || "Erro ao salvar lançamento. Verifique sua conexão e tente novamente.";
+      const message = financialErrorMessage(err);
       setValidationError(message);
       console.error("Erro ao criar lançamento:", err);
-
-      setDisplayDates({ data_lancamento: isoToDisplay(todayBrazilISO), data_vencimento: "" });
     }
   });
 
   const handleFileUpload = async (e) => {
+    if (!canManage) return;
     const file = e.target.files?.[0];
     if (!file) return;
 
@@ -173,6 +178,7 @@ export default function LancamentoForm({ categorias }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!canManage) return;
     setValidationError("");
 
     if (formData.tipo === "Saída" && !formData.data_vencimento) {
@@ -194,6 +200,7 @@ export default function LancamentoForm({ categorias }) {
       try {
         const newCat = await withTimeout(
           base44.entities.CategoriaFinanceira.create({
+            organization_id: user.organization_id,
             nome,
             tipo: formData.tipo,
             cor: "#6B7280"
@@ -207,7 +214,7 @@ export default function LancamentoForm({ categorias }) {
         finalCategoriaNome = nome;
       } catch (err) {
         console.error("Erro ao criar categoria:", err);
-        setValidationError(err?.message || "Erro ao criar categoria. Tente novamente.");
+        setValidationError(financialErrorMessage(err));
         return;
       } finally {
         setIsCreatingCategoria(false);
@@ -583,7 +590,7 @@ export default function LancamentoForm({ categorias }) {
             </Button>
             <Button
               type="submit"
-              disabled={createMutation.isPending || isCreatingCategoria}
+              disabled={!canManage || createMutation.isPending || isCreatingCategoria}
               style={{ background: 'linear-gradient(135deg, #07593f 0%, #0a6b4d 100%)' }}
             >
               {createMutation.isPending || isCreatingCategoria ? 'Salvando...' : 'Criar Lançamento'}

@@ -1,3 +1,4 @@
+import { useAuth } from "@/hooks/useAuth";
 import React, { useState } from "react";
 import { base44 } from "@/api/base44Client";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/dialog";
 
 export default function CategoriasManager({ categorias }) {
+  const { can } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCategoria, setEditingCategoria] = useState(null);
   const [formData, setFormData] = useState({
@@ -30,7 +32,10 @@ export default function CategoriasManager({ categorias }) {
   const queryClient = useQueryClient();
 
   const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.CategoriaFinanceira.create(data),
+    mutationFn: (data) => {
+      if (!can("create_financial_category")) throw new Error("Sem permissão para criar categorias.");
+      return base44.entities.CategoriaFinanceira.create(data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categorias-financeiras'] });
       setIsModalOpen(false);
@@ -39,7 +44,10 @@ export default function CategoriasManager({ categorias }) {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.CategoriaFinanceira.update(id, data),
+    mutationFn: ({ id, data }) => {
+      if (!can("manage_financial_categories")) throw new Error("Somente administrador pode editar categorias.");
+      return base44.entities.CategoriaFinanceira.update(id, data);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categorias-financeiras'] });
       setIsModalOpen(false);
@@ -48,7 +56,10 @@ export default function CategoriasManager({ categorias }) {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.CategoriaFinanceira.delete(id),
+    mutationFn: (id) => {
+      if (!can("manage_financial_categories")) throw new Error("Somente administrador pode excluir categorias.");
+      return base44.entities.CategoriaFinanceira.delete(id);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['categorias-financeiras'] });
     }
@@ -166,6 +177,7 @@ export default function CategoriasManager({ categorias }) {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={!can("manage_financial_categories")}
                       onClick={() => handleEdit(cat)}
                       className="flex-1"
                     >
@@ -176,7 +188,7 @@ export default function CategoriasManager({ categorias }) {
                       size="sm"
                       variant="destructive"
                       onClick={() => handleDelete(cat.id)}
-                      disabled={deleteMutation.isPending}
+                      disabled={!can("manage_financial_categories") || deleteMutation.isPending}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>
@@ -284,7 +296,7 @@ export default function CategoriasManager({ categorias }) {
               </Button>
               <Button 
                 type="submit"
-                disabled={createMutation.isPending || updateMutation.isPending}
+                disabled={!(editingCategoria ? can("manage_financial_categories") : can("create_financial_category")) || createMutation.isPending || updateMutation.isPending}
                 style={{ background: 'linear-gradient(135deg, #07593f 0%, #0a6b4d 100%)' }}
               >
                 {(createMutation.isPending || updateMutation.isPending) ? 'Salvando...' : 'Salvar'}

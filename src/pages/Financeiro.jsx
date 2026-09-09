@@ -60,7 +60,7 @@ function getMonthStartYmd() {
 }
 
 
-export default function Financeiro() {
+function FinanceiroContent() {
   const { user, loading, can } = useAuth();
   const [activeTab, setActiveTab] = useState("visao-geral");
   const [mesAno, setMesAno] = useState(new Date().toISOString().slice(0, 7));
@@ -79,37 +79,37 @@ export default function Financeiro() {
   const queryOpts = { enabled: !!user && canViewFinanceiro };
 
   const { data: lancamentos = [], isLoading: loadingLancamentos } = useQuery({
-    queryKey: ['lancamentos-financeiros'],
+    queryKey: ['lancamentos-financeiros', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.LancamentoFinanceiro.list('-data_lancamento') || [],
     ...queryOpts,
   });
 
   const { data: categorias = [] } = useQuery({
-    queryKey: ['categorias-financeiras'],
+    queryKey: ['categorias-financeiras', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.CategoriaFinanceira.list('nome') || [],
     ...queryOpts,
   });
 
   const { data: vendas = [], isLoading: loadingVendas } = useQuery({
-    queryKey: ['vendas-financeiro'],
+    queryKey: ['vendas-financeiro', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.Venda.list('-data_venda') || [],
     ...queryOpts,
   });
 
   const { data: folhas = [], isLoading: loadingFolhas } = useQuery({
-    queryKey: ['folhas-pagamento'],
+    queryKey: ['folhas-pagamento', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.FolhaPagamento.list('-created_at') || [],
     ...queryOpts,
   });
 
   const { data: comissoes = [], isLoading: loadingComissoes } = useQuery({
-    queryKey: ['comissoes-historico'],
+    queryKey: ['comissoes-historico', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.ComissaoHistorico.list('-data_calculo') || [],
     ...queryOpts,
   });
 
   const { data: contasPagarCompras = [], isLoading: loadingCompras } = useQuery({
-    queryKey: ['contas-pagar-compras'],
+    queryKey: ['contas-pagar-compras', user?.organization_id, user?.id],
     queryFn: async () => {
       try {
         return await base44.entities.ContaPagarCompras.list('-created_at') || [];
@@ -122,25 +122,25 @@ export default function Financeiro() {
   });
 
   const { data: metas = [] } = useQuery({
-    queryKey: ['metas-vendas'],
+    queryKey: ['metas-vendas', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.MetaVenda.list() || [],
     ...queryOpts,
   });
 
   const { data: colaboradores = [] } = useQuery({
-    queryKey: ['colaboradores-financeiro'],
+    queryKey: ['colaboradores-financeiro', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.Colaborador.list() || [],
     ...queryOpts,
   });
 
   const { data: entregas = [] } = useQuery({
-    queryKey: ['entregas-financeiro'],
+    queryKey: ['entregas-financeiro', user?.organization_id, user?.id],
     queryFn: async () => await base44.entities.Entrega.list('-created_at') || [],
     ...queryOpts,
   });
 
   const { data: ocsPendentes = [], isLoading: loadingOcsPendentes } = useQuery({
-    queryKey: ['compras-pendentes-aprovacao'],
+    queryKey: ['compras-pendentes-aprovacao', user?.organization_id, user?.id],
     queryFn: async () => {
       try {
         return await base44.entities.ComprasOrden.filter({ pagamento_status: 'pendente_aprovacao' }, '-created_at') || [];
@@ -186,7 +186,7 @@ export default function Financeiro() {
     { id: "contas-pagar",   label: "Saídas",             icon: TrendingUp },
     { id: "lancamentos",    label: "Lançamentos",        icon: DollarSign },
     { id: "graficos",       label: "Gráficos",           icon: BarChart3 },
-    { id: "aprovacao-compras", label: "Aprovação de Compras", icon: ShoppingCart, count: pendentesCount },
+    ...(can("approve_payment_oc") ? [{ id: "aprovacao-compras", label: "Aprovação de Compras", icon: ShoppingCart, count: pendentesCount }] : []),
     ...(canManage ? [{ id: "novo", label: "Novo", icon: Plus }] : []),
   ];
 
@@ -369,4 +369,8 @@ export default function Financeiro() {
       <LancamentosList onlyModal categorias={categorias} />
     </div>
   );
+}
+export default function Financeiro() {
+  const { user } = useAuth();
+  return <FinanceiroContent key={user?.id + ':' + user?.organization_id} />;
 }
