@@ -12,6 +12,7 @@ import { supabase } from '@/lib/supabase';
 import { obterDataLocalString, adicionarDias } from '@/utils/dateUtils';
 import { findCategoriaByNames } from '@/lib/financeiroRecorrencia';
 import { formatarNome } from '@/utils/formatters';
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 // ─────────────────────────────────────────────────────────────
 // Lançamentos Financeiros (extraído do PDV para reutilização)
@@ -26,9 +27,15 @@ export const criarLancamentosVendaConferida = async (venda, taxas = [], categori
     'Venda de Produtos',
     'Vendas',
   ]);
+  const criar = (sufixo, entry) => createOperationalFinancialEntry({
+    sourceType: 'venda',
+    sourceId: venda.id,
+    operationKey: `venda:${venda.id}:${sufixo}`,
+    entry: { ...entry, venda_id: venda.id, numero_pedido: venda.numero_pedido },
+  });
 
   // 1. Receita Bruta da Venda
-  await base44.entities.LancamentoFinanceiro.create({
+  await criar('receita', {
     descricao: `Venda #${venda.numero_pedido} - ${formatarNome(venda.cliente_nome)}`,
     valor: venda.valor_total + (venda.desconto || 0),
     tipo: 'receita',
@@ -40,13 +47,11 @@ export const criarLancamentosVendaConferida = async (venda, taxas = [], categori
     forma_pagamento: formaPrimaria,
     status: (venda.status === 'Pago' || venda.status === 'Pago & Retirado') ? 'Pago' : 'Pendente',
     observacao: `Pedido ${venda.numero_pedido} — conferido pelo caixa`,
-    venda_id: venda.id,
-    numero_pedido: venda.numero_pedido,
   });
 
   // 2. Desconto (se houver)
   if ((venda.desconto || 0) > 0) {
-    await base44.entities.LancamentoFinanceiro.create({
+    await criar('desconto', {
       descricao: `Desconto Venda #${venda.numero_pedido}`,
       valor: -venda.desconto,
       tipo: 'despesa',
@@ -56,13 +61,11 @@ export const criarLancamentosVendaConferida = async (venda, taxas = [], categori
       categoria_nome: 'Descontos Concedidos',
       status: 'Pago',
       observacao: 'Desconto aplicado no PDV',
-      venda_id: venda.id,
-      numero_pedido: venda.numero_pedido,
     });
   }
 
   // 3. Taxas de cartão (para cada pagamento)
-  for (const pagamento of pagamentos) {
+  for (const [paymentIndex, pagamento] of pagamentos.entries()) {
     const taxa = (taxas || []).find((t) => {
       if (pagamento.forma_pagamento === 'Crédito' && pagamento.parcelas > 1) {
         return t.forma_pagamento === 'Crédito Parcelado';
@@ -80,7 +83,7 @@ export const criarLancamentosVendaConferida = async (venda, taxas = [], categori
           : taxa.valor;
 
       if (valorTaxa > 0) {
-        await base44.entities.LancamentoFinanceiro.create({
+        await criar(`taxa:${paymentIndex}`, {
           descricao: `Taxa ${pagamento.forma_pagamento} — Venda #${venda.numero_pedido}`,
           valor: -valorTaxa,
           tipo: 'despesa',
@@ -91,8 +94,6 @@ export const criarLancamentosVendaConferida = async (venda, taxas = [], categori
           forma_pagamento: pagamento.forma_pagamento,
           status: 'Pago',
           observacao: `${taxa.valor}${taxa.tipo_taxa === 'porcentagem' ? '%' : ' R$'} sobre R$ ${pagamento.valor?.toFixed(2)}`,
-          venda_id: venda.id,
-          numero_pedido: venda.numero_pedido,
         });
       }
     }

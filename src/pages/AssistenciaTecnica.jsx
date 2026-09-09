@@ -18,8 +18,8 @@ import { abrirAssistenciaTecnicaPDF } from "../components/assistencia/Assistenci
 import { useTenant } from "@/contexts/TenantContext";
 import { toast } from "sonner";
 import DevolucaoModal from "../components/devolucoes/DevolucaoModal";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
-const DEFAULT_TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const TIPOS_COM_REPOSICAO = ['Troca', 'Peça Faltante'];
 
 const TIPOS_ASSISTENCIA = [
@@ -164,8 +164,9 @@ export default function AssistenciaTecnica() {
             }
 
             // 3. Salvar a assistência
+            let assistenciaSalva;
             if (isEditing) {
-                await base44.entities.AssistenciaTecnica.update(editingAssistencia.id, formData);
+                assistenciaSalva = await base44.entities.AssistenciaTecnica.update(editingAssistencia.id, formData);
             } else {
                 // Ao criar, já adicionar o primeiro registro no histórico
                 formData.historico = [{
@@ -174,7 +175,7 @@ export default function AssistenciaTecnica() {
                     data: new Date().toISOString(),
                     usuario: user?.full_name || user?.email || 'Sistema'
                 }];
-                await base44.entities.AssistenciaTecnica.create(formData);
+                assistenciaSalva = await base44.entities.AssistenciaTecnica.create(formData);
             }
 
             // 4. INTEGRAÇÃO FINANCEIRA - Executar quando concluída com valores
@@ -182,7 +183,11 @@ export default function AssistenciaTecnica() {
                 // Se houver valor devolvido, criar lançamento de saída
                 if (formData.valor_devolvido > 0) {
                     try {
-                        await base44.entities.LancamentoFinanceiro.create({
+                        await createOperationalFinancialEntry({
+                            sourceType: 'assistencia',
+                            sourceId: assistenciaSalva.id,
+                            operationKey: `assistencia:${assistenciaSalva.id}:devolucao`,
+                            entry: {
                             descricao: `Devolução #${formData.numero_pedido} - ${formData.cliente_nome} (${formData.tipo})`,
                             valor: -formData.valor_devolvido,
                             tipo: 'despesa',
@@ -192,17 +197,26 @@ export default function AssistenciaTecnica() {
                             categoria_nome: 'Devoluções/Assistência',
                             status: 'Pago',
                             observacao: `Assistência técnica: ${formData.descricao_problema?.substring(0, 100)}...`
+                            },
                         });
                         console.log('✅ Lançamento de devolução criado:', formData.valor_devolvido);
                     } catch (err) {
-                        console.error('Erro ao criar lançamento de devolução:', err);
+                        await base44.entities.AssistenciaTecnica.update(assistenciaSalva.id, {
+                            status: statusAnterior,
+                            data_resolucao: null,
+                        });
+                        throw new Error(`Assistência salva, mas o lançamento da devolução falhou: ${err.message}`);
                     }
                 }
 
                 // Se houver valor cobrado, criar lançamento de entrada
                 if (formData.valor_cobrado > 0) {
                     try {
-                        await base44.entities.LancamentoFinanceiro.create({
+                        await createOperationalFinancialEntry({
+                            sourceType: 'assistencia',
+                            sourceId: assistenciaSalva.id,
+                            operationKey: `assistencia:${assistenciaSalva.id}:cobranca`,
+                            entry: {
                             descricao: `Serviço AT #${formData.numero_pedido} - ${formData.cliente_nome} (${formData.tipo})`,
                             valor: formData.valor_cobrado,
                             tipo: 'receita',
@@ -212,10 +226,15 @@ export default function AssistenciaTecnica() {
                             categoria_nome: 'Serviços/Assistência',
                             status: 'Pago',
                             observacao: `Assistência técnica: ${formData.solucao_aplicada?.substring(0, 100) || 'N/A'}`
+                            },
                         });
                         console.log('✅ Lançamento de serviço criado:', formData.valor_cobrado);
                     } catch (err) {
-                        console.error('Erro ao criar lançamento de serviço:', err);
+                        await base44.entities.AssistenciaTecnica.update(assistenciaSalva.id, {
+                            status: statusAnterior,
+                            data_resolucao: null,
+                        });
+                        throw new Error(`Assistência salva, mas o lançamento do serviço falhou: ${err.message}`);
                     }
                 }
 
@@ -316,7 +335,7 @@ export default function AssistenciaTecnica() {
                                 referencia_numero: formData.numero_pedido,
                                 usuario_id: user?.id,
                                 usuario_nome: user?.full_name || user?.email || 'Sistema',
-                                organization_id: DEFAULT_TENANT_ID
+                                organization_id: user?.organization_id
                             });
 
                             // e) Criar solicitação de reposição para o setor de compras
@@ -330,7 +349,7 @@ export default function AssistenciaTecnica() {
                                 loja_nome: lojaInfo.loja_nome,
                                 status: 'Pendente',
                                 observacoes: `Gerado ao concluir assistência #${formData.numero_pedido} - ${formData.tipo} - ${formData.cliente_nome}`,
-                                tenant_id: DEFAULT_TENANT_ID
+                                tenant_id: user?.organization_id
                             });
 
                             console.log('✅ Reposição criada e estoque decrementado:', prodSaiNome, 'loja:', lojaInfo.loja_nome);

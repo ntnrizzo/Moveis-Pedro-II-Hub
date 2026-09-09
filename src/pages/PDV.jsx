@@ -48,6 +48,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { RestricaoCheckbox } from "@/components/ui/restricao-checkbox";
 
 import { identityKey, offlineSalesStore } from '@/utils/identityStorage';
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 // --- FUNÇÃO PARA CONSTRUIR ENDEREÇO COMPLETO DE ENTREGA ---
 const construirEnderecoEntrega = (cliente) => {
@@ -124,9 +125,15 @@ const obterPrazoEncomenda = (prazos) => {
 const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
   try {
     const hoje = obterDataLocalString();
+    const criar = (sufixo, entry) => createOperationalFinancialEntry({
+      sourceType: 'venda',
+      sourceId: vendaId,
+      operationKey: `venda:${vendaId}:${sufixo}`,
+      entry: { ...entry, venda_id: vendaId, numero_pedido: vendaData.numero_pedido },
+    });
 
     // 1. Receita Bruta da Venda
-    await base44.entities.LancamentoFinanceiro.create({
+    await criar('receita', {
       descricao: `Venda #${vendaData.numero_pedido} - ${formatarNome(vendaData.cliente_nome)}`,
       valor: vendaData.valor_total + (vendaData.desconto || 0),
       tipo: 'receita',
@@ -137,13 +144,11 @@ const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
       forma_pagamento: vendaData.pagamentos?.[0]?.forma_pagamento || 'Diversos',
       status: vendaData.status === 'Pago' ? 'Pago' : 'Pendente',
       observacao: `Pedido ${vendaData.numero_pedido}`,
-      venda_id: vendaId, // Vinculado à venda
-      numero_pedido: vendaData.numero_pedido
     });
 
     // 2. Lançamento de Desconto (se houver)
     if (vendaData.desconto > 0) {
-      await base44.entities.LancamentoFinanceiro.create({
+      await criar('desconto', {
         descricao: `Desconto Venda #${vendaData.numero_pedido}${vendaData.cupom_codigo ? ` (Cupom: ${vendaData.cupom_codigo})` : ''}`,
         valor: -vendaData.desconto,
         tipo: 'despesa',
@@ -153,14 +158,12 @@ const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
         categoria_nome: 'Descontos Concedidos',
         status: 'Pago',
         observacao: vendaData.cupom_codigo ? `Cupom: ${vendaData.cupom_codigo}` : 'Desconto manual',
-        venda_id: vendaId,
-        numero_pedido: vendaData.numero_pedido
       });
     }
 
     // 2.b Lançamento de Acréscimo/Arredondamento (se desconto for negativo)
     if (vendaData.desconto < 0) {
-      await base44.entities.LancamentoFinanceiro.create({
+      await criar('acrescimo', {
         descricao: `Arredondamento Venda #${vendaData.numero_pedido}`,
         valor: Math.abs(vendaData.desconto),
         tipo: 'receita',
@@ -171,13 +174,11 @@ const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
         forma_pagamento: vendaData.pagamentos?.[0]?.forma_pagamento || 'Diversos',
         status: vendaData.status === 'Pago' ? 'Pago' : 'Pendente',
         observacao: 'Acréscimo de arredondamento no PDV',
-        venda_id: vendaId,
-        numero_pedido: vendaData.numero_pedido
       });
     }
 
     // 3. Lançamentos de Taxas de Cartão (para cada pagamento)
-    for (const pagamento of vendaData.pagamentos || []) {
+    for (const [paymentIndex, pagamento] of (vendaData.pagamentos || []).entries()) {
       const taxa = taxas.find(t => {
         if (pagamento.forma_pagamento === 'Crédito' && pagamento.parcelas > 1) {
           return t.forma_pagamento === 'Crédito Parcelado';
@@ -195,7 +196,7 @@ const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
         }
 
         if (valorTaxa > 0) {
-          await base44.entities.LancamentoFinanceiro.create({
+          await criar(`taxa:${paymentIndex}`, {
             descricao: `Taxa ${pagamento.forma_pagamento} - Venda #${vendaData.numero_pedido}`,
             valor: -valorTaxa,
             tipo: 'despesa',
@@ -206,8 +207,6 @@ const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
             forma_pagamento: pagamento.forma_pagamento,
             status: 'Pago',
             observacao: `${taxa.valor}${taxa.tipo_taxa === 'porcentagem' ? '%' : ' R$'} sobre R$ ${pagamento.valor.toFixed(2)}`,
-            venda_id: vendaId,
-            numero_pedido: vendaData.numero_pedido
           });
         }
       }
@@ -216,6 +215,7 @@ const criarLancamentosVenda = async (vendaData, taxas, vendaId) => {
     console.log('✅ Lançamentos financeiros criados para venda', vendaData.numero_pedido);
   } catch (error) {
     console.error('❌ Erro ao criar lançamentos financeiros:', error);
+    throw error;
   }
 };
 
@@ -1829,7 +1829,7 @@ function PDVSession({ organizationId, userId }) {
         });
       }
 
-      executarEmSegundoPlano('criar lançamentos financeiros', async () => {
+      await medirDuracaoEtapa('criar lançamentos financeiros', async () => {
         await criarLancamentosVenda(vendaData, taxasFinanceiras, vendaCriada.id);
         await queryClient.invalidateQueries({ queryKey: ['lancamentos-financeiros'] });
       });

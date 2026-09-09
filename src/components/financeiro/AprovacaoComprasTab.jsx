@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useConfirm } from "@/hooks/useConfirm";
+import { approvePurchaseOrderPayment } from "@/services/financialOperations";
 
 function OcApprovalCard({ oc, categorias, currentUser }) {
   const { can } = useAuth();
@@ -32,33 +33,18 @@ function OcApprovalCard({ oc, categorias, currentUser }) {
   const aprovaMutation = useMutation({
     mutationFn: async () => {
       if (!can("approve_payment_oc")) throw new Error("Sem permissão para aprovar pagamento de compras.");
-      const statusLancamento = form.ja_pago ? "Pago" : "Pendente";
       const categoriaObj = categorias.find(c => c.id === form.categoria_id);
       const ultimoAnexo = oc.anexos_financeiro?.[oc.anexos_financeiro.length - 1];
       const anexoUrl = ultimoAnexo?.url || solicitacao.anexo_url || "";
-
-      await base44.entities.LancamentoFinanceiro.create({
-        tipo: "Saída",
-        categoria_id: form.categoria_id,
-        categoria_nome: categoriaObj?.nome || solicitacao.categoria_nome || "",
-        descricao: solicitacao.descricao || `Compra OC #${oc.numero_pedido}`,
-        valor: Number(oc.valor_total || 0),
-        status: statusLancamento,
-        data_vencimento: form.data_vencimento,
-        data_pagamento: form.ja_pago ? (form.data_pagamento || new Date().toISOString().slice(0, 10)) : null,
-        forma_pagamento: form.forma_pagamento,
-        observacao: solicitacao.observacao || "",
-        detalhe_devolucao: solicitacao.detalhe_devolucao || "",
-        anexo_url: anexoUrl,
-        numero_pedido: oc.numero_pedido,
-        fornecedor_nome: oc.fornecedor_nome,
-        origem: `OC#${oc.numero_pedido}`,
-      });
-
-      await base44.entities.ComprasOrden.update(oc.id, {
-        pagamento_status: "pago",
-        pagamento_aprovado_por: currentUser?.full_name || currentUser?.email || currentUser?.nome || "Financeiro",
-        pagamento_aprovado_em: new Date().toISOString(),
+      await approvePurchaseOrderPayment({
+        purchaseOrderId: oc.id,
+        categoryId: form.categoria_id,
+        dueDate: form.data_vencimento,
+        paymentMethod: form.forma_pagamento,
+        alreadyPaid: form.ja_pago,
+        paymentDate: form.data_pagamento,
+        observation: solicitacao.observacao || categoriaObj?.nome || null,
+        attachmentUrl: anexoUrl,
       });
     },
     onSuccess: () => {

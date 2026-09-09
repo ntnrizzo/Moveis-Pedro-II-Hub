@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { useTenant } from "@/contexts/TenantContext";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 export default function RelatorioComissoes() {
   const { organization, settings } = useTenant();
@@ -487,7 +488,11 @@ export default function RelatorioComissoes() {
 
     setProcessandoPagamento(true);
     try {
-      await base44.entities.LancamentoFinanceiro.create({
+      await createOperationalFinancialEntry({
+        sourceType: 'comissao',
+        sourceId: pagamentoSelecionado.fechamento_id,
+        operationKey: `comissao:${pagamentoSelecionado.fechamento_id}:pagamento`,
+        entry: {
         descricao: `Comissão - ${pagamentoSelecionado.vendedor.nome} - Ref: ${mesInicio === mesFim ? mesInicio : `${mesInicio} a ${mesFim}`}`,
         valor: -Number(pagamentoSelecionado.totalFinal.toFixed(2)),
         tipo: 'despesa',
@@ -496,6 +501,7 @@ export default function RelatorioComissoes() {
         forma_pagamento: 'Transferência',
         status: 'Pago',
         observacao: `Pgto ref. ${pagamentoSelecionado.quantidadeVendas} vendas. ${observacaoPagamento}`,
+        },
       });
 
       if (pagamentoSelecionado.fechamento_id) {

@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 import { calcularEstoqueTotal } from "@/constants/productConstants";
 import { useLojas } from "@/hooks/useLojas";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 export default function RecebimentoPedido({ open, onClose, pedido }) {
     const { data: lojas = [] } = useLojas();
@@ -217,7 +218,11 @@ export default function RecebimentoPedido({ open, onClose, pedido }) {
             }, 0);
 
             if (totalRecebido > 0) {
-                await base44.entities.LancamentoFinanceiro.create({
+                await createOperationalFinancialEntry({
+                  sourceType: 'pedido_compra_legado',
+                  sourceId: pedido.id,
+                  operationKey: `pedido-compra:${pedido.id}:recebimento:${Object.entries(quantidadesRecebidas).map(([id, quantidade]) => `${id}-${quantidade}`).join(',')}`,
+                  entry: {
                     descricao: `Compra de Mercadoria - Pedido ${pedido.numero_pedido} - ${pedido.fornecedor_nome}`,
                     valor: totalRecebido,
                     tipo: 'despesa',
@@ -227,6 +232,7 @@ export default function RecebimentoPedido({ open, onClose, pedido }) {
                     status: 'Pendente',
                     pago: false,
                     observacao: `Recebimento do pedido ${pedido.numero_pedido}. Fornecedor: ${pedido.fornecedor_nome}`
+                  },
                 });
             }
 

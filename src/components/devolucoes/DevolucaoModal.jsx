@@ -29,9 +29,9 @@ import {
   PAYMENT_METHOD_OPTIONS,
   PAYMENT_METHOD_OPTIONS_DELIVERY,
 } from "@/services/paymentOrchestrator";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 export default function DevolucaoModal({ isOpen, onClose, onSave, devolucao, devolucoes = [], vendas = [], produtos = [], fornecedores = [], isLoading }) {
-const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
 
   const { user } = useAuth();
   const { data: lojasData = [] } = useLojas();
@@ -603,7 +603,7 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
             referencia_numero: formData.numero_pedido || null,
             loja_origem: formData.destino_estoque || null,
             observacao: item.motivo || null,
-            organization_id: DEFAULT_ORGANIZATION_ID
+            organization_id: user?.organization_id
           });
         } catch (auditErr) {
           console.warn('Falha ao registrar movimentação de devolução:', auditErr);
@@ -642,7 +642,7 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
             referencia_id: formData.venda_id,
             referencia_numero: formData.numero_pedido || null,
             loja_origem: formData.destino_estoque || null,
-            organization_id: DEFAULT_ORGANIZATION_ID
+            organization_id: user?.organization_id
           });
         } catch (auditErr) {
           console.warn('Falha ao registrar movimentação de troca:', auditErr);
@@ -656,29 +656,18 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
     const valorDevolvido = Number(formData.valor_devolvido || 0);
     const valorDiferenca = Number(formData.valor_diferenca || 0);
 
-    const createLancamentoComFallback = async (payload) => {
-      try {
-        return await base44.entities.LancamentoFinanceiro.create(payload);
-      } catch (error) {
-        const payloadCompat = {
-          descricao: payload.descricao,
-          valor: payload.valor,
-          tipo: payload.tipo,
-          data_vencimento: payload.data_vencimento,
-          data_lancamento: payload.data_lancamento,
-          pago: payload.pago,
-          categoria_nome: payload.categoria_nome,
-          status: payload.status,
-          observacao: payload.observacao,
-          forma_pagamento: payload.forma_pagamento || 'Dinheiro'
-        };
-        console.warn('Fallback de compatibilidade no lançamento financeiro:', error?.message || error);
-        return await base44.entities.LancamentoFinanceiro.create(payloadCompat);
-      }
+    const createLancamento = (suffix, payload) => {
+      if (!devolucao?.id) throw new Error('Salve a devolução antes de gerar os lançamentos.');
+      return createOperationalFinancialEntry({
+        sourceType: 'devolucao',
+        sourceId: devolucao.id,
+        operationKey: `devolucao:${devolucao.id}:${suffix}`,
+        entry: payload,
+      });
     };
 
     if (valorDevolvido > 0) {
-      const lancamentoPrincipal = await createLancamentoComFallback({
+      const lancamentoPrincipal = await createLancamento('principal', {
         descricao: `Devolução #${formData.numero_pedido} - ${formData.cliente_nome}`,
         valor: -valorDevolvido,
         tipo: 'despesa',
@@ -693,7 +682,6 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
         origem_tipo: 'devolucao',
         origem_id: devolucao?.id || null,
         origem_ref: formData.numero_pedido || null,
-        organization_id: DEFAULT_ORGANIZATION_ID,
       });
       lancamentosIds.push(lancamentoPrincipal.id);
     }
@@ -703,7 +691,7 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
         .map((pagamento) => `${pagamento.forma_pagamento} R$ ${Number(pagamento.valor || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`)
         .join(' + ');
 
-      const lancamentoDiferenca = await createLancamentoComFallback({
+      const lancamentoDiferenca = await createLancamento('diferenca', {
         descricao: `Diferença de Troca #${formData.numero_pedido} - ${formData.cliente_nome}`,
         valor: valorDiferenca,
         tipo: 'receita',
@@ -719,14 +707,13 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
         origem_tipo: 'devolucao_troca',
         origem_id: devolucao?.id || null,
         origem_ref: formData.numero_pedido || null,
-        organization_id: DEFAULT_ORGANIZATION_ID,
       });
       lancamentosIds.push(lancamentoDiferenca.id);
     }
 
     if (formData.tipo === 'Troca' && valorDiferenca < 0 && formData.destino_troco === 'devolver') {
       const trocoADevolver = Math.abs(valorDiferenca);
-      const lancamentoTroco = await createLancamentoComFallback({
+      const lancamentoTroco = await createLancamento('troco', {
         descricao: `Troco a devolver - Troca #${formData.numero_pedido} - ${formData.cliente_nome}`,
         valor: trocoADevolver,
         tipo: 'despesa',
@@ -742,7 +729,6 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
         origem_tipo: 'devolucao_troca_troco',
         origem_id: devolucao?.id || null,
         origem_ref: formData.numero_pedido || null,
-        organization_id: DEFAULT_ORGANIZATION_ID,
       });
       lancamentosIds.push(lancamentoTroco.id);
     }
@@ -758,7 +744,7 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
       ...formData,
       ...recalculo,
       status: devolucao?.status === 'Rejeitada' ? 'Rejeitada' : 'Pendente',
-      organization_id: formData.organization_id || DEFAULT_ORGANIZATION_ID
+      organization_id: formData.organization_id || user?.organization_id
     };
 
     await onSave(payload);
@@ -820,7 +806,7 @@ const DEFAULT_ORGANIZATION_ID = '00000000-0000-0000-0000-000000000001';
         data_processamento: new Date().toISOString(),
         financeiro_lancamento_id: lancamentosIds[0] || null,
         financeiro_lancamentos_ids: lancamentosIds,
-        organization_id: formData.organization_id || DEFAULT_ORGANIZATION_ID
+        organization_id: formData.organization_id || user?.organization_id
       };
 
       await onSave(updatedData);

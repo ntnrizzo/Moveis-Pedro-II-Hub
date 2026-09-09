@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { base44 } from "@/api/base44Client";
 import { calcularFolhaCompleta } from "@/utils/calculosTrabalhistas";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -208,9 +209,11 @@ export default function FolhaPagamentoTab() {
                     }
                 }
 
-                await base44.entities.FolhaPagamento.update(folha.id, updates);
-
-                await base44.entities.LancamentoFinanceiro.create({
+                await createOperationalFinancialEntry({
+                    sourceType: 'folha',
+                    sourceId: folha.id,
+                    operationKey: `folha:${folha.id}:${item.tipo.toLowerCase()}:${dataHoje}`,
+                    entry: {
                     descricao: `${item.tipo} (Dia ${diaSelecionado}) - ${mesStr} - ${item.colaborador_nome}`,
                     valor: -item.valor,
                     tipo: "despesa",
@@ -218,7 +221,9 @@ export default function FolhaPagamentoTab() {
                     data_lancamento: dataHoje,
                     forma_pagamento: "Transferência",
                     status: "Pago",
+                    },
                 });
+                await base44.entities.FolhaPagamento.update(folha.id, updates);
             }
 
             queryClient.invalidateQueries(["folhas_pagamento"]);
@@ -390,13 +395,8 @@ export default function FolhaPagamentoTab() {
         if (!folhaParaPagar) return;
 
         try {
-            // 1. Update Folha status
-            await base44.entities.FolhaPagamento.update(folhaParaPagar.id, {
-                status: 'Pago',
-                data_pagamento: new Date().toISOString().slice(0, 10),
-            });
-
-            // 2. Create Financial Entry (Optional)
+            // Cria primeiro os lançamentos idempotentes. Assim, se a atualização
+            // da folha falhar, a tentativa pode ser repetida sem duplicar valores.
             if (gerarLancamentoFinanceiro) {
                 // Look up collaborator data to check vale distribution
                 const colab = colaboradores.find(c => c.id === folhaParaPagar.colaborador_id);
@@ -421,7 +421,9 @@ export default function FolhaPagamentoTab() {
                     // Entry for Dia do Pagamento
                     if (valorDiaPagamento > 0) {
                         const diaPgto = colab?.dia_pagamento || 5;
-                        await base44.entities.LancamentoFinanceiro.create({
+                        await createOperationalFinancialEntry({
+                            sourceType: 'folha', sourceId: folhaParaPagar.id,
+                            operationKey: `folha:${folhaParaPagar.id}:salario`, entry: {
                             descricao: `Folha Pgto (Dia ${diaPgto}) - ${mesStr} - ${nome}`,
                             valor: -valorDiaPagamento,
                             tipo: 'despesa',
@@ -429,13 +431,16 @@ export default function FolhaPagamentoTab() {
                             data_lancamento: buildDate(diaPgto),
                             forma_pagamento: 'Transferência',
                             status: 'Pago'
+                            },
                         });
                     }
 
                     // Entry for Dia do Vale
                     if (valorDiaVale > 0) {
                         const diaVale = colab?.dia_vale || 20;
-                        await base44.entities.LancamentoFinanceiro.create({
+                        await createOperationalFinancialEntry({
+                            sourceType: 'folha', sourceId: folhaParaPagar.id,
+                            operationKey: `folha:${folhaParaPagar.id}:vale`, entry: {
                             descricao: `Vale (Dia ${diaVale}) - ${mesStr} - ${nome}`,
                             valor: -valorDiaVale,
                             tipo: 'despesa',
@@ -443,11 +448,14 @@ export default function FolhaPagamentoTab() {
                             data_lancamento: buildDate(diaVale),
                             forma_pagamento: 'Transferência',
                             status: 'Pago'
+                            },
                         });
                     }
                 } else {
                     // Default: single salary entry
-                    await base44.entities.LancamentoFinanceiro.create({
+                    await createOperationalFinancialEntry({
+                        sourceType: 'folha', sourceId: folhaParaPagar.id,
+                        operationKey: `folha:${folhaParaPagar.id}:salario`, entry: {
                         descricao: `Pagamento Folha - ${MESES[folhaParaPagar.mes_referencia - 1]}/${folhaParaPagar.ano_referencia} - ${folhaParaPagar.colaborador_nome}`,
                         valor: -Number(folhaParaPagar.salario_liquido),
                         tipo: 'despesa',
@@ -455,12 +463,15 @@ export default function FolhaPagamentoTab() {
                         data_lancamento: new Date().toISOString().slice(0, 10),
                         forma_pagamento: 'Transferência',
                         status: 'Pago'
+                        },
                     });
                 }
 
                 // INSS entry (if > 0)
                 if (Number(folhaParaPagar.inss) > 0) {
-                    await base44.entities.LancamentoFinanceiro.create({
+                    await createOperationalFinancialEntry({
+                        sourceType: 'folha', sourceId: folhaParaPagar.id,
+                        operationKey: `folha:${folhaParaPagar.id}:inss`, entry: {
                         descricao: `INSS Descontado - ${MESES[folhaParaPagar.mes_referencia - 1]}/${folhaParaPagar.ano_referencia} - ${folhaParaPagar.colaborador_nome}`,
                         valor: -Number(folhaParaPagar.inss),
                         tipo: 'despesa',
@@ -468,12 +479,15 @@ export default function FolhaPagamentoTab() {
                         data_lancamento: new Date().toISOString().slice(0, 10),
                         forma_pagamento: 'Transferência',
                         status: 'Pago'
+                        },
                     });
                 }
 
                 // FGTS entry (if > 0)
                 if (Number(folhaParaPagar.fgts) > 0) {
-                    await base44.entities.LancamentoFinanceiro.create({
+                    await createOperationalFinancialEntry({
+                        sourceType: 'folha', sourceId: folhaParaPagar.id,
+                        operationKey: `folha:${folhaParaPagar.id}:fgts`, entry: {
                         descricao: `FGTS Recolhido - ${MESES[folhaParaPagar.mes_referencia - 1]}/${folhaParaPagar.ano_referencia} - ${folhaParaPagar.colaborador_nome}`,
                         valor: -Number(folhaParaPagar.fgts),
                         tipo: 'despesa',
@@ -481,9 +495,15 @@ export default function FolhaPagamentoTab() {
                         data_lancamento: new Date().toISOString().slice(0, 10),
                         forma_pagamento: 'Transferência',
                         status: 'Pago'
+                        },
                     });
                 }
             }
+
+            await base44.entities.FolhaPagamento.update(folhaParaPagar.id, {
+                status: 'Pago',
+                data_pagamento: new Date().toISOString().slice(0, 10),
+            });
 
             queryClient.invalidateQueries(['folhas_pagamento']);
             toast.success("Pagamento registrado com sucesso!");

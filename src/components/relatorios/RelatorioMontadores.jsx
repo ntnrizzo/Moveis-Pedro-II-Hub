@@ -18,6 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertTriangle, UserCog, Save } from "lucide-react";
 import { toast } from "sonner";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 function chaveLancamentoMontador(montadorId, dataInicio, dataFim) {
   return `[MONTAGEM_EXT|${montadorId}|${dataInicio}|${dataFim}]`;
@@ -90,7 +91,9 @@ export default function RelatorioMontadores() {
   });
 
   const criarLancamentoMontagem = useMutation({
-    mutationFn: (data) => base44.entities.LancamentoFinanceiro.create(data),
+    mutationFn: ({ sourceId, operationKey, ...entry }) => createOperationalFinancialEntry({
+      sourceType: 'montagem', sourceId, operationKey, entry,
+    }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["relatorio-montadores-lancamentos"] });
       queryClient.invalidateQueries({ queryKey: ["lancamentos-financeiros"] });
@@ -207,6 +210,8 @@ export default function RelatorioMontadores() {
 
     try {
       await criarLancamentoMontagem.mutateAsync({
+        sourceId: grupo.itens[0]?.id,
+        operationKey: grupo.chaveLancamento,
         descricao: `Montagem Externa - ${grupo.montadorNome} (${dataInicio} a ${dataFim})`,
         valor: Number(grupo.totalBruto.toFixed(2)),
         tipo: "despesa",

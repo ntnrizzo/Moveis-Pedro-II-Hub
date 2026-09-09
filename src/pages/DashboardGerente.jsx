@@ -28,7 +28,7 @@ import { isVendaCancelada, getVendaFinanceiro } from "@/utils/vendaStatus";
 import { VendaDetalhesModal } from "@/components/vendas/VendaDetalhesModal";
 import { MONEY_EPSILON, toMoneyNumber } from "@/utils/deliveryPayment";
 import { isInstallmentPaymentMethod, validatePaymentSplit } from "@/services/paymentOrchestrator";
-import { findCategoriaByNames } from "@/lib/financeiroRecorrencia";
+import { registerSalePayment } from "@/services/financialOperations";
 import {
     DollarSign,
     ShoppingCart,
@@ -645,12 +645,6 @@ export default function DashboardGerente() {
         enabled: !!user
     });
 
-    const { data: categoriasFinanceiras = [] } = useQuery({
-        queryKey: ['categorias-financeiras'],
-        queryFn: () => base44.entities.CategoriaFinanceira.list('nome'),
-        enabled: !!user
-    });
-
     const { data: lancamentos = [] } = useQuery({
         queryKey: ['lancamentos-financeiros'],
         queryFn: () => base44.entities.LancamentoFinanceiro.list(),
@@ -842,8 +836,6 @@ export default function DashboardGerente() {
 
         const financeiroAtual = venda.financeiro || getVendaFinanceiro(venda, { entregas, lancamentos });
         const saldoAtual = Math.max(toMoneyNumber(financeiroAtual.valorRestante), 0);
-        const totalVenda = Math.max(toMoneyNumber(financeiroAtual.total || venda.valor_total), 0);
-        const valorPagoAtual = Math.max(toMoneyNumber(financeiroAtual.valorPago || venda.valor_pago), 0);
 
         const rawPayments = Array.isArray(valorRecebido)
             ? valorRecebido
@@ -869,82 +861,17 @@ export default function DashboardGerente() {
             throw new Error('Informe um valor de pagamento maior que zero.');
         }
 
-        const novoValorPago = Math.min(totalVenda, valorPagoAtual + valorRecebidoNum);
-        const novoValorRestante = Math.max(totalVenda - novoValorPago, 0);
-        const quitada = novoValorRestante <= MONEY_EPSILON;
-        const statusVenda = quitada ? 'Pago' : 'Pagamento Pendente';
-        const pagamentosExistentes = Array.isArray(venda.pagamentos) ? venda.pagamentos : [];
-        const pagamentosAtualizados = [...pagamentosExistentes, ...novosPagamentos];
-        const formaPagamentoResumo = pagamentosAtualizados.length === 1
-            ? pagamentosAtualizados[0].forma_pagamento
-            : 'Múltiplos';
-
-        const vendaUpdatePayload = {
-            valor_pago: novoValorPago,
-            valor_restante: novoValorRestante,
-            status: statusVenda,
-            forma_pagamento: formaPagamentoResumo,
-            pagamentos: pagamentosAtualizados,
-            pagamento_entrega_observacao: observacao || null,
+        const result = await registerSalePayment({
+            saleId: venda.id,
+            payments: novosPagamentos,
+            paymentDate: dataPagamento,
+            observation: observacao,
+        });
+        return {
+            valorRecebidoNum: Number(result.valorRecebido || valorRecebidoNum),
+            novoValorRestante: Number(result.valorRestante || 0),
+            quitada: Boolean(result.pagamentoQuitado),
         };
-
-        try {
-            await base44.entities.Venda.update(venda.id, vendaUpdatePayload);
-        } catch (error) {
-            const mensagem = String(error?.message || '').toLowerCase();
-            const colunaAusente = mensagem.includes('pagamento_entrega_observacao') && mensagem.includes('schema cache');
-
-            if (!colunaAusente) {
-                throw error;
-            }
-
-            const { pagamento_entrega_observacao, ...fallbackPayload } = vendaUpdatePayload;
-            await base44.entities.Venda.update(venda.id, fallbackPayload);
-        }
-
-        const categoriaRecebimento = findCategoriaByNames(categoriasFinanceiras, [
-            'Recebimento de Parcela',
-            'Venda de Produtos',
-            'Vendas',
-        ]);
-
-        for (const pagamento of novosPagamentos) {
-            const descricaoParcelas = pagamento.parcelas > 1 ? ` (${pagamento.parcelas}x)` : '';
-            await base44.entities.LancamentoFinanceiro.create({
-                descricao: `Pagamento na loja - Venda #${venda.numero_pedido} - ${pagamento.forma_pagamento}${descricaoParcelas}`,
-                valor: pagamento.valor,
-                tipo: 'receita',
-                data_lancamento: dataPagamento,
-                data_vencimento: dataPagamento,
-                pago: true,
-                categoria_id: categoriaRecebimento?.id || null,
-                categoria_nome: categoriaRecebimento?.nome || 'Recebimento de Parcela',
-                forma_pagamento: pagamento.forma_pagamento,
-                status: 'Pago',
-                observacao: observacao || 'Pagamento antecipado registrado na listagem de vendas.',
-                venda_id: venda.id,
-                numero_pedido: venda.numero_pedido,
-            });
-        }
-
-        if (quitada) {
-            const pendentesVenda = (lancamentos || []).filter((l) =>
-                l.venda_id === venda.id &&
-                String(l.tipo || '').toLowerCase() === 'receita' &&
-                String(l.status || '').toLowerCase() === 'pendente'
-            );
-
-            for (const lancamento of pendentesVenda) {
-                await base44.entities.LancamentoFinanceiro.update(lancamento.id, {
-                    status: 'Pago',
-                    pago: true,
-                    data_lancamento_real: dataPagamento,
-                    observacao: `${lancamento.observacao || ''} [Quitado na loja antes da entrega]`.trim(),
-                });
-            }
-        }
-
-        return { valorRecebidoNum, novoValorRestante, quitada };
     };
 
     const registrarPagamentoMutation = useMutation({

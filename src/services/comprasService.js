@@ -1,8 +1,7 @@
 import { base44 } from "@/api/base44Client";
 import { supabase } from "@/lib/supabase";
 import { buildProductDisplayName } from "@/utils/productReference";
-
-const DEFAULT_TENANT_ID = '00000000-0000-0000-0000-000000000001';
+import { approvePurchaseOrderPayment } from "@/services/financialOperations";
 
 function mergeOcMetadata(currentMetadata = {}, incomingMetadata = {}, lojaId = null) {
   return {
@@ -557,89 +556,21 @@ export const comprasService = {
         throw new Error(`OC não está aguardando aprovação de pagamento. Status atual: ${oc.pagamento_status}`);
       }
 
-      const ocAtualizada = await base44.entities.ComprasOrden.update(ocId, {
-        pagamento_status: 'pago',
-        pagamento_aprovado_por: data.aprovado_por || null,
-        pagamento_aprovado_em: new Date().toISOString(),
-        pagamento_forma_final: data.pagamento_forma_final || null,
-        pagamento_formas_multiplas: data.pagamento_formas_multiplas || [],
-        pagamento_parcelas: data.pagamento_parcelas || null,
-        pagamento_valor_pago: data.pagamento_valor_pago || null,
-        pagamento_data_pagamento: data.pagamento_data_pagamento || null,
-        pagamento_observacoes: data.pagamento_observacoes || null,
-        updated_at: new Date().toISOString(),
+      const { data: categoria } = await supabase
+        .from('categorias_financeiras')
+        .select('id')
+        .eq('nome', 'Compras de Estoque')
+        .maybeSingle();
+      const dataPagamento = data.pagamento_data_pagamento || new Date().toISOString().slice(0, 10);
+      return await approvePurchaseOrderPayment({
+        purchaseOrderId: ocId,
+        categoryId: categoria?.id || null,
+        dueDate: dataPagamento,
+        paymentMethod: data.pagamento_forma_final || null,
+        alreadyPaid: true,
+        paymentDate: dataPagamento,
+        observation: data.pagamento_observacoes || null,
       });
-
-      // Atualizar ou criar lançamento financeiro correspondente
-      try {
-        // Buscar por número de OC na descrição OU no campo origem
-        const { data: lancamentosDesc } = await supabase
-          .from('lancamentos_financeiros')
-          .select('id, valor, status')
-          .ilike('descricao', `%OC #${oc.numero_pedido}%`)
-          .is('deleted_at', null)
-          .limit(5);
-
-        const { data: lancamentosOrigem } = await supabase
-          .from('lancamentos_financeiros')
-          .select('id, valor, status')
-          .ilike('origem', `%OC#${oc.numero_pedido}%`)
-          .is('deleted_at', null)
-          .limit(5);
-
-        const todosEncontrados = [...(lancamentosDesc || []), ...(lancamentosOrigem || [])];
-        // Deduplica por id
-        const unicos = Object.values(
-          Object.fromEntries(todosEncontrados.map((l) => [l.id, l]))
-        );
-
-        const dataFormaDesc = data.pagamento_forma_final
-          ? ` — ${data.pagamento_forma_final}`
-          : '';
-        const dataPagamento = data.pagamento_data_pagamento || new Date().toISOString().split('T')[0];
-
-        if (unicos.length > 0) {
-          // Atualiza o primeiro encontrado como Pago
-          await base44.entities.LancamentoFinanceiro.update(unicos[0].id, {
-            status: 'Pago',
-            data_lancamento_real: dataPagamento,
-            forma_pagamento: data.pagamento_forma_final || null,
-            observacao: `Aprovado pelo master.${dataFormaDesc}${data.pagamento_observacoes ? ' ' + data.pagamento_observacoes : ''}`,
-          });
-        } else {
-          // Lançamento ainda não existe (OC talvez não tenha sido totalmente recebida)
-          const { data: categoriasCompra } = await supabase
-            .from('categorias_financeiras')
-            .select('id, nome')
-            .eq('nome', 'Compras de Estoque')
-            .single();
-
-          const lancamentoPayload = {
-            tipo: 'DESPESA',
-            descricao: `Compra OC #${oc.numero_pedido}${dataFormaDesc}`,
-            valor: data.pagamento_valor_pago || oc.valor_total,
-            data_vencimento: dataPagamento,
-            data_lancamento: new Date().toISOString().split('T')[0],
-            data_lancamento_real: dataPagamento,
-            status: 'Pago',
-            origem: `OC#${oc.numero_pedido}`,
-            numero_pedido: String(oc.numero_pedido),
-            fornecedor_nome: oc.fornecedor_nome || null,
-            forma_pagamento: data.pagamento_forma_final || null,
-            observacao: `Lançamento gerado na aprovação de pagamento da OC ${oc.numero_pedido}.${data.pagamento_observacoes ? ' ' + data.pagamento_observacoes : ''}`,
-          };
-          if (categoriasCompra?.id) {
-            lancamentoPayload.categoria_id = categoriasCompra.id;
-            lancamentoPayload.categoria_nome = categoriasCompra.nome;
-          }
-          await base44.entities.LancamentoFinanceiro.create(lancamentoPayload);
-        }
-      } catch (financeiroError) {
-        console.warn('Aviso: não foi possível atualizar lançamento financeiro:', financeiroError);
-        // Não lança erro para não reverter a aprovação
-      }
-
-      return ocAtualizada;
     } catch (error) {
       console.error('Erro ao aprovar pagamento da OC:', error);
       throw error;

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { isValidGTIN, normalizeGTIN, generateSafeSKU } from "@/utils/gtinValidator";
+import { createOperationalFinancialEntry } from '@/services/financialOperations';
 
 export default function ImportarNFe({ user }) {
   const [activeTab, setActiveTab] = useState("arquivo");
@@ -261,9 +262,7 @@ export default function ImportarNFe({ user }) {
     };
   };
 
-  // Buscar nota via Edge Function (SEGURO - sem credenciais no frontend)
-  const consultarNotaNaAPI = async () => {
-    // Processar importacao completa
+  // Processar importacao local do XML selecionado
   const processarImportacao = async () => {
     if (!dadosCompletos) return;
 
@@ -413,7 +412,11 @@ export default function ImportarNFe({ user }) {
 
       // 4. Criar lancamento financeiro (conta a pagar)
       setEtapaAtual("Criando lancamento financeiro...");
-      const lancamento = await base44.entities.LancamentoFinanceiro.create({
+      const lancamento = await createOperationalFinancialEntry({
+        sourceType: 'nota_entrada',
+        sourceId: nfe.id,
+        operationKey: `nota-entrada:${nfe.id}:conta-pagar`,
+        entry: {
         descricao: `NFe ${dadosCompletos.nota.numero_nota} - ${dadosCompletos.emitente.razao_social}`,
         valor: dadosCompletos.totais.valor_total_nota,
         tipo: "Despesa",
@@ -426,6 +429,7 @@ export default function ImportarNFe({ user }) {
           dadosCompletos.pagamento.forma_pagamento === "03" ? "Cartao Credito" :
             dadosCompletos.pagamento.forma_pagamento === "04" ? "Cartao Debito" : "Boleto",
         observacao: `Importado automaticamente da NFe ${dadosCompletos.nota.chave_acesso}`,
+        },
       });
 
       // Atualizar NFe com ID do lancamento
@@ -747,7 +751,6 @@ export default function ImportarNFe({ user }) {
                     variant="outline"
                     onClick={() => {
                       setDadosCompletos(null);
-                      setChaveAcesso("");
                       setResultado(null);
                     }}
                     className="w-full"

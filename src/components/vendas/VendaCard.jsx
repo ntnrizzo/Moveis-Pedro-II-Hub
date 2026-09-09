@@ -12,6 +12,7 @@ import { format } from "date-fns";
 import { formatarDataExibicao } from "@/utils/dateUtils";
 import { stripInternalProductPrefixes } from "@/utils/productReference";
 import { isStatusCancelado } from "@/utils/vendaStatus";
+import { cancelSaleFinancialEntries } from '@/services/financialOperations';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -46,21 +47,8 @@ export default function VendaCard({ venda, onEdit, onDelete, onLiberarEstoque, s
       // 1. Atualizar status da venda para Cancelado
       await base44.entities.Venda.update(venda.id, { status: 'Cancelado' });
 
-      // 2. Cancelar lançamentos financeiros vinculados
-      try {
-        const lancamentos = await base44.entities.LancamentoFinanceiro.list();
-        const lancamentosVenda = lancamentos.filter(l =>
-          l.venda_id === venda.id || l.numero_pedido === venda.numero_pedido
-        );
-        for (const lanc of lancamentosVenda) {
-          await base44.entities.LancamentoFinanceiro.update(lanc.id, {
-            status: 'Cancelado',
-            observacao: (lanc.observacao || '') + ' [VENDA CANCELADA]'
-          });
-        }
-      } catch (err) {
-        console.error('Erro ao cancelar lançamentos:', err);
-      }
+      // 2. Cancelar lançamentos financeiros vinculados no mesmo tenant
+      await cancelSaleFinancialEntries(venda.id);
 
       // 3. Cancelar entregas vinculadas
       try {
