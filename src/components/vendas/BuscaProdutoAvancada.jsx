@@ -13,6 +13,7 @@ import { supabase } from "@/lib/supabase";
 import { useQueryClient } from "@tanstack/react-query";
 import ProdutoCadastroCompleto from "@/components/produtos/ProdutoCadastroCompleto";
 import { getProductStockFields } from "@/utils/stockUtils";
+import { resolveProductByIdentifier, IDENTIFIER_TYPES } from "@/domain/catalog/productResolver";
 
 export default function BuscaProdutoAvancada(props) {
   const { produtos, onSelectProduto, onEditProduto, fornecedores = [] } = props;
@@ -375,18 +376,77 @@ export default function BuscaProdutoAvancada(props) {
       {showResults && searchTerm && !variantesProduto && (
         <div className="absolute top-full left-0 right-0 z-50 mt-1 bg-white dark:bg-neutral-900 border-2 border-green-600 rounded-lg shadow-2xl overflow-hidden">
           {produtosFiltrados.length === 0 ? (
-            <div className="p-6 text-center">
-              <Package className="w-8 h-8 mx-auto mb-2 text-gray-300" />
-              <p className="text-sm text-gray-500 mb-4">Nenhum produto encontrado</p>
+            <div className="p-6 text-center space-y-3">
+              <Package className="w-8 h-8 mx-auto text-gray-300" />
+              <div>
+                <p className="text-sm font-medium text-gray-600">Nenhum produto encontrado</p>
+                <p className="text-xs text-gray-400 mt-1">
+                  O produto pode ser criado automaticamente como pendente.
+                </p>
+              </div>
+
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  setIsModalOpen(true);
+                disabled={isSavingProduto}
+                onClick={async () => {
+                  const value = searchTerm.trim();
+                  if (!value) return;
+
+                  setIsSavingProduto(true);
+                  try {
+                    const result = await resolveProductByIdentifier({
+                      supabase,
+                      identifierType: IDENTIFIER_TYPES.SKU,
+                      identifierValue: value,
+                    });
+
+                    await queryClient.invalidateQueries({ queryKey: ['produtos'] });
+
+                    if (result?.product_id) {
+                      const { data: produtoCriado, error } = await supabase
+                        .from('produtos')
+                        .select('*')
+                        .eq('id', result.product_id)
+                        .single();
+
+                      if (error) throw error;
+
+                      onSelectProduto({
+                        ...produtoCriado,
+                        is_encomenda: false,
+                      });
+
+                      setSearchTerm("");
+                      setShowResults(false);
+                      toast.success(
+                        result.created
+                          ? "Produto criado como cadastro pendente e adicionado ao carrinho."
+                          : "Produto localizado e adicionado ao carrinho."
+                      );
+                    }
+                  } catch (error) {
+                    console.error("[V2] Erro ao resolver produto:", error);
+                    toast.error(
+                      "Não foi possível criar/localizar o produto. A estrutura V2 precisa estar aplicada no banco."
+                    );
+                  } finally {
+                    setIsSavingProduto(false);
+                  }
                 }}
                 className="w-full border-green-200 text-green-700 hover:bg-green-50"
               >
-                <Plus className="w-4 h-4 mr-2" /> Cadastrar item
+                <Plus className="w-4 h-4 mr-2" />
+                Usar "{searchTerm.trim()}" como código
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setIsModalOpen(true)}
+                className="w-full text-xs text-gray-500 hover:text-green-700"
+              >
+                Cadastrar item manualmente
               </Button>
             </div>
           ) : (
